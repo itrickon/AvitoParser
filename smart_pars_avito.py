@@ -1,10 +1,5 @@
-import os
-import json
-import re
-import time
-import random
-import atexit
-import signal
+import os, signal, atexit, re
+import json, time, random
 from base64 import b64decode
 from io import BytesIO
 from pathlib import Path
@@ -23,7 +18,7 @@ from playwright.sync_api import (
 
 
 # ВХОДНОЙ ФАЙЛ С ССЫЛКАМИ
-INPUT_FILE = Path("РЕМОНТ МСК МО 13.11.xlsx")  # Имя Excel/CSV-файла со ссылками на объявления
+INPUT_FILE = Path("РЕМОНТ МСК МО 13.11.xlsx")  # Имя Excel/CSV-файла с ссылками на объявления
 
 INPUT_SHEET = None  # Имя листа в Excel; None = использовать все листы
 URL_COLUMN = None   # Имя колонки со ссылками; None = искать ссылки во всех колонках
@@ -31,7 +26,7 @@ URL_COLUMN = None   # Имя колонки со ссылками; None = иск
 # ПАПКИ И ОСНОВНЫЕ ВЫХОДНЫЕ ФАЙЛЫ
 OUT_DIR = Path("avito_phones_playwright")  # Рабочая директория парсера
 OUT_DIR.mkdir(exist_ok=True)
-IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URI = False  (Не провряли давно и не используется))
+IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URI = False  (То что не провряли давно и не используется))
 IMG_DIR.mkdir(exist_ok=True)
 DEBUG_DIR = OUT_DIR / "debug"  # Сюда складываем скриншоты и html проблемных объявлений
 DEBUG_DIR.mkdir(exist_ok=True)
@@ -42,7 +37,7 @@ SAVE_DATA_URI = (True)                            # True = сохраняем da
 HEADLESS = False                                  # False = браузер виден (можно логиниться руками)
 
 # ОБЪЁМ И ПАРАЛЛЕЛЬНОСТЬ
-TEST_TOTAL = 765  # Максимум объявлений за один запуск (обрежется по списку ссылок)
+TEST_TOTAL = 766  # Максимум объявлений за один запуск (обрежется по списку ссылок)
 CONCURRENCY = 3   # Сколько вкладок (tab-ов) одновременно открыто (2–3 оптимально)
 
 
@@ -152,14 +147,13 @@ def human_hover(page: Page, el):
 
 
 def safe_get_content(page: Page) -> str:
-    try:
-        return page.content()
-    except PWError:
-        time.sleep(0.8)
+    for _ in range(2):
         try:
             return page.content()
         except PWError:
-            return ""
+            time.sleep(1)
+    return ""
+
 
 
 def is_captcha_or_block(page: Page) -> bool:
@@ -168,11 +162,11 @@ def is_captcha_or_block(page: Page) -> bool:
     except PWError:
         url = ""
     html = safe_get_content(page).lower()
-    if "captcha" in url or "firewall" in url:
-        return True
-    if "доступ с вашего ip-адреса временно ограничен" in html:
-        return True
-    return False
+    return (
+        "captcha" in url or 
+        "firewall" in url or
+        "доступ с вашего ip-адреса временно ограничен" in html
+    )
 
 
 def close_city_or_cookie_modals(page: Page):
@@ -185,23 +179,29 @@ def close_city_or_cookie_modals(page: Page):
         "button:has-text('Согласен')",
         "button:has-text('Принять')",
     ]
-    for sel in selectors:
+    for b in page.query_selector_all(selectors):
         try:
-            for b in page.query_selector_all(sel):
-                if b.is_visible():
-                    human_hover(page, b)
-                    b.click()
-                    human_sleep(0.25, 0.7)
+            if b.is_visible():
+                human_hover(page, b)
+                b.click()
+                human_sleep(0.25, 0.7)
         except Exception:
             continue
 
 
 def close_login_modal_if_exists(page: Page) -> bool:
+    """Если вылезла авторизация после клика — закрываем и считаем объявление неудачным."""
     selectors_modal = [
         "[data-marker='login-form']",
         "[data-marker='registration-form']",
         "div[class*='modal'][class*='auth']",
         "div[class*='modal'] form[action*='login']",
+    ]
+    close_selectors = [
+        "button[aria-label='Закрыть']",
+        "button[data-marker='modal-close']",
+        "button[class*='close']",
+        "button[type='button']",
     ]
     for sel in selectors_modal:
         try:
@@ -211,12 +211,7 @@ def close_login_modal_if_exists(page: Page) -> bool:
         for m in modals:
             if not m.is_visible():
                 continue
-            for btn_sel in [
-                "button[aria-label='Закрыть']",
-                "button[data-marker='modal-close']",
-                "button[class*='close']",
-                "button[type='button']",
-            ]:
+            for btn_sel in close_selectors:
                 btn = m.query_selector(btn_sel)
                 if btn and btn.is_enabled():
                     try:
@@ -531,7 +526,11 @@ def extract_phone_data_uri_on_ad(page: Page) -> str | None:
         print("Картинка с номером не найдена.")
         return None
 
-    src = img.get_attribute("src") or ""
+    # Получаем src атрибут
+    try:
+        src = img.get_attribute("src") or ""
+    except Exception:
+        img = None
     if not src.startswith("data:image"):
         print(f"src не data:image, а: {src[:60]}...")
         return None
