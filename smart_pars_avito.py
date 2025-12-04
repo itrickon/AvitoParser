@@ -1,10 +1,5 @@
-import os
-import json
-import re
-import time
-import random
-import atexit
-import signal
+import os, signal, atexit, re
+import json, time, random
 from base64 import b64decode
 from io import BytesIO
 from pathlib import Path
@@ -23,7 +18,7 @@ from playwright.sync_api import (
 
 
 # ВХОДНОЙ ФАЙЛ С ССЫЛКАМИ
-INPUT_FILE = Path("РЕМОНТ МСК МО 13.11.xlsx")  # Имя Excel/CSV-файла со ссылками на объявления
+INPUT_FILE = Path("РЕМОНТ МСК МО 13.11.xlsx")  # Имя Excel/CSV-файла с ссылками на объявления
 
 INPUT_SHEET = None  # Имя листа в Excel; None = использовать все листы
 URL_COLUMN = None   # Имя колонки со ссылками; None = искать ссылки во всех колонках
@@ -31,7 +26,7 @@ URL_COLUMN = None   # Имя колонки со ссылками; None = иск
 # ПАПКИ И ОСНОВНЫЕ ВЫХОДНЫЕ ФАЙЛЫ
 OUT_DIR = Path("avito_phones_playwright")  # Рабочая директория парсера
 OUT_DIR.mkdir(exist_ok=True)
-IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URI = False  (Не провряли давно и не используется))
+IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URI = False  (То что не провряли давно и не используется))
 IMG_DIR.mkdir(exist_ok=True)
 DEBUG_DIR = OUT_DIR / "debug"  # Сюда складываем скриншоты и html проблемных объявлений
 DEBUG_DIR.mkdir(exist_ok=True)
