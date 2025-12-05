@@ -67,14 +67,17 @@ async def close_city_or_cookie_modals(page: Page):
         "button:has-text('Понятно')",
         "button:has-text('Хорошо')",
     ]
-    for b in await page.query_selector_all(selectors):
+    for sel in selectors:
         try:
-            if await b.is_visible():
-                await b.click()
-                await human_sleep(0.3, 0.8)
+            for b in await page.query_selector_all(sel):
+                try:
+                    if await b.is_visible():
+                        await b.click()
+                        await human_sleep(0.3, 0.8)
+                except Exception:
+                    continue
         except Exception:
             continue
-
 
 async def close_login_modal_if_exists(page: Page) -> bool:
     """Если вылезла авторизация после клика — закрываем и считаем объявление неудачным."""

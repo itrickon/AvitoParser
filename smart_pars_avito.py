@@ -14,9 +14,6 @@ from playwright.sync_api import (
     Error as PWError,
 )
 
-# НАСТРОЙКИ
-
-
 # ВХОДНОЙ ФАЙЛ С ССЫЛКАМИ
 INPUT_FILE = Path("РЕМОНТ МСК МО 13.11.xlsx")  # Имя Excel/CSV-файла с ссылками на объявления
 
@@ -25,30 +22,30 @@ URL_COLUMN = None   # Имя колонки со ссылками; None = иск
 
 # ПАПКИ И ОСНОВНЫЕ ВЫХОДНЫЕ ФАЙЛЫ
 OUT_DIR = Path("avito_phones_playwright")  # Рабочая директория парсера
-OUT_DIR.mkdir(exist_ok=True)
+OUT_DIR.mkdir(exist_ok=True)  # mkdir - создание папки, если её нет
 IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URI = False  (То что не провряли давно и не используется))
 IMG_DIR.mkdir(exist_ok=True)
 DEBUG_DIR = OUT_DIR / "debug"  # Сюда складываем скриншоты и html проблемных объявлений
 DEBUG_DIR.mkdir(exist_ok=True)
 
-OUT_JSON = (OUT_DIR / "phones_map.json")          # Основной результат: {url: data:image... или тег __SKIP_*__}
-PENDING_JSON = (OUT_DIR / "pending_review.json")  # Ссылки «на модерации» и с лимитом контактов (в разработке на будущее)
-SAVE_DATA_URI = (True)                            # True = сохраняем data:image в JSON; False = сохраняем PNG в IMG_DIR
-HEADLESS = False                                  # False = браузер виден (можно логиниться руками)
+OUT_JSON = (OUT_DIR / "phones" / "phones_map.json")  # Основной результат: {url: data:image... или тег __SKIP_*__}
+PENDING_JSON = (OUT_DIR / "pending_review.json")     # Ссылки «на модерации» и с лимитом контактов (в разработке на будущее)
+SAVE_DATA_URI = (True)                               # True = сохраняем data:image в JSON; False = сохраняем PNG в IMG_DIR
+HEADLESS = False                                     # False = браузер виден (можно логиниться руками)
 
 # ОБЪЁМ И ПАРАЛЛЕЛЬНОСТЬ
 TEST_TOTAL = 766  # Максимум объявлений за один запуск (обрежется по списку ссылок)
-CONCURRENCY = 3   # Сколько вкладок (tab-ов) одновременно открыто (2–3 оптимально)
+CONCURRENCY = 3   # Количество одновременно открытых вкладок браузера (2–3 оптимально)
 
 
 # БАЗОВЫЕ ТАЙМАУТЫ
-CLICK_DELAY = 8       # Базовая задержка перед ожиданием появления картинки с номером
+CLICK_DELAY = 8       # Базовая задержка в секундах перед ожиданием появления номера телефона
 NAV_TIMEOUT = 90_000  # Таймаут загрузки страницы, мс (90 секунд)
 
 
 # НАСТРОЙКИ ПРОКСИ
 USE_PROXY = False                # True = использовать прокси, False = напрямую
-PROXY_HOST = "mproxy.site"       # Адрес прокси-сервера
+PROXY_HOST = "mproxy.site"       # Хост прокси-сервера
 PROXY_PORT = 17518               # Порт прокси-сервера
 PROXY_LOGIN = "YT4aBK"           # Логин для авторизации на прокси
 PROXY_PASSWORD = "nUg2UTut9UMU"  # Пароль для авторизации на прокси
@@ -77,13 +74,13 @@ HUMAN = {
     "pre_click_pause_s": (0.10, 0.28),        # Короткая пауза перед кликом
     "post_click_pause_s": (0.12, 0.32),       # Пауза сразу после клика
     "mouse_wiggle_px": (4, 12),               # Амплитуда «подёргивания» мыши
-    "mouse_wiggle_steps": (2, 5),             # Сколько шагов этих «подёргиваний»
+    "mouse_wiggle_steps": (2, 5),             # Сколько шагов «подёргиваний» мыши
     "between_actions_pause": (0.10, 0.30, ),  # Пауза между действиями (скролл, клик, наведение)
     "click_delay_jitter": (
         CLICK_DELAY * 0.9,
         CLICK_DELAY * 1.25,
-    ),  # Разброс ожидания после клика по телефону
-    "randomize_selectors": True,  # Иногда менять порядок селекторов, чтобы не бить всегда в один и тот же
+    ),  # Случайная задержка после клика по телефону (min и max)
+    "randomize_selectors": True,  # Флаг случайного изменения порядка селекторов
 }
 
 
@@ -97,47 +94,70 @@ TAG_LIMIT = "__SKIP_LIMIT__"              # Закончился лимит по
 # ХЕЛПЕРЫ
 
 def human_sleep(a: float, b: float):
+    '''
+    Приостанавливает выполнение на случайное количество секунд в диапазоне [a, b].
+    Используется для имитации человеческих пауз и предотвращения блокировок!
+    '''
     time.sleep(random.uniform(a, b))
 
 
 def human_pause_jitter():
+    '''
+    Короткая пауза между действиями на основе настройки HUMAN["between_actions_pause"].
+    Добавляет естественности поведению скрипта.
+    '''
     human_sleep(*HUMAN["between_actions_pause"])
 
 
 def human_scroll_jitter(page: Page, count: int | None = None):
+    '''
+    Имитирует человеческий скроллинг страницы.
+    Выполняет случайное количество скроллов со случайным шагом и направлением.
+    page: Playwright Page объект
+    count: Количество скроллов
+    '''
     if count is None:
-        count = random.randint(*HUMAN["pre_page_warmup_scrolls"])
+        count = random.randint(*HUMAN["pre_page_warmup_scrolls"]) # Случайное количество скролов
     try:
         height = page.evaluate("() => document.body.scrollHeight") or 3000
         for _ in range(count):
             step = random.randint(*HUMAN["scroll_step_px"])
             direction = 1 if random.random() > 0.25 else -1
             y = max(0, min(height, page.evaluate("() => window.scrollY") + step * direction))
-            page.evaluate("y => window.scrollTo({top: y, behavior: 'smooth'})", y)
+            page.evaluate("y => window.scrollTo({top: y, behavior: 'smooth'})", y)  # Плавный скролл через JavaScript
             human_sleep(*HUMAN["scroll_pause_s"])
     except Exception:
         pass
 
 
 def human_wiggle_mouse(page: Page, x: float, y: float):
-    steps = random.randint(*HUMAN["mouse_wiggle_steps"])
-    amp = random.randint(*HUMAN["mouse_wiggle_px"])
+    '''
+    Имитирует мелкие случайные движения мыши вокруг указанных координат.
+    Добавляет реалистичности наведению мыши.
+    '''
+    steps = random.randint(*HUMAN["mouse_wiggle_steps"])  # Шаги подергиваний
+    amp = random.randint(*HUMAN["mouse_wiggle_px"])  # Амплитуда подергиваний
     for _ in range(steps):
-        dx = random.randint(-amp, amp)
+        dx = random.randint(-amp, amp)  # Смещения x и y
         dy = random.randint(-amp, amp)
         try:
             page.mouse.move(x + dx, y + dy)
         except Exception:
             pass
-        human_pause_jitter()
+        human_pause_jitter()  # Пауза между движениями
 
 
 def human_hover(page: Page, el):
+    '''
+    Имитирует человеческое наведение мыши на элемент.
+    Вычисляет центр элемента, добавляет случайное смещение и вибрацию мыши.
+    el: Элемент для наведения
+    '''
     try:
-        box = el.bounding_box()
+        box = el.bounding_box()  # Получение координат и размеров элемента
         if not box:
             return
-        cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)
+        cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)  # Корды x, y в пределах элемента
         cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
         page.mouse.move(cx, cy)
         human_wiggle_mouse(page, cx, cy)
@@ -147,21 +167,29 @@ def human_hover(page: Page, el):
 
 
 def safe_get_content(page: Page) -> str:
+    '''
+    Безопасно получает HTML-содержимое страницы с одной попыткой повторения.
+    Return: HTML-код страницы или пустая строка при ошибке
+    '''
     for _ in range(2):
         try:
             return page.content()
-        except PWError:
+        except PWError:  # Обработка ошибок Playwright
             time.sleep(1)
     return ""
 
 
 
 def is_captcha_or_block(page: Page) -> bool:
+    '''
+    Проверка на капчу. 
+    Return: True если обнаружены признаки блокировки или капчи
+    '''
     try:
-        url = page.url.lower()
+        url = page.url.lower()  # Получение URL
     except PWError:
         url = ""
-    html = safe_get_content(page).lower()
+    html = safe_get_content(page).lower()  # Получение HTML
     return (
         "captcha" in url or 
         "firewall" in url or
@@ -170,6 +198,10 @@ def is_captcha_or_block(page: Page) -> bool:
 
 
 def close_city_or_cookie_modals(page: Page):
+    '''
+    Закрывает всплывающие модальные окна (укажите город; куки; уведомления).
+    Пытается найти и кликнуть на кнопки закрытия по различным селекторам.
+    '''
     selectors = [
         "button[aria-label='Закрыть']",
         "button[data-marker='modal-close']",
@@ -179,40 +211,47 @@ def close_city_or_cookie_modals(page: Page):
         "button:has-text('Согласен')",
         "button:has-text('Принять')",
     ]
-    for b in page.query_selector_all(selectors):
+    for sel in selectors:  # Цикл по всем селекторам
         try:
-            if b.is_visible():
-                human_hover(page, b)
-                b.click()
-                human_sleep(0.25, 0.7)
+            for b in page.query_selector_all(sel):  # Поиск всех элементов по селектору
+                try:
+                    if b.is_visible():  # Проверка видимости элемента
+                        human_hover(page, b)
+                        b.click()
+                        human_sleep(0.25, 0.7)
+                except Exception:
+                    continue
         except Exception:
             continue
 
 
 def close_login_modal_if_exists(page: Page) -> bool:
-    """Если вылезла авторизация после клика — закрываем и считаем объявление неудачным."""
+    '''
+    Пытается закрыть окно авторизации, если оно появилось.
+    Return: True если модальное окно было найдено и попытка закрытия выполнена
+    '''
     selectors_modal = [
         "[data-marker='login-form']",
         "[data-marker='registration-form']",
         "div[class*='modal'][class*='auth']",
         "div[class*='modal'] form[action*='login']",
-    ]
+    ]  # Селекторы авторизации
     close_selectors = [
         "button[aria-label='Закрыть']",
         "button[data-marker='modal-close']",
         "button[class*='close']",
         "button[type='button']",
-    ]
+    ]  # Селекторы закрытия
     for sel in selectors_modal:
         try:
-            modals = page.query_selector_all(sel)
+            modals = page.query_selector_all(sel)  # Поиск всех модальных окон по селектору
         except PWError:
             continue
         for m in modals:
             if not m.is_visible():
                 continue
             for btn_sel in close_selectors:
-                btn = m.query_selector(btn_sel)
+                btn = m.query_selector(btn_sel)  # Поиск кнопки закрытия внутри модального окна
                 if btn and btn.is_enabled():
                     try:
                         human_hover(page, btn)
@@ -229,12 +268,19 @@ def close_login_modal_if_exists(page: Page) -> bool:
 
 
 def save_phone_png_from_data_uri(data_uri: str, file_stem: str) -> str | None:
+    '''
+    Сохраняет изображение телефона из data:image URI в PNG файл.
+    Args:
+        data_uri: Строка data:image с изображением
+        file_stem: Имя файла без расширения
+    Return: Путь к сохраненному файлу или None при ошибке
+    '''
     try:
-        _, b64_data = data_uri.split(",", 1)
-        raw = b64decode(b64_data)
-        image = Image.open(BytesIO(raw)).convert("RGB")
+        _, b64_data = data_uri.split(",", 1)  # Разделение data:image URI и получение base64 данных
+        raw = b64decode(b64_data)             # Декодирование base64 в бинарные данные
+        image = Image.open(BytesIO(raw)).convert("RGB")  # Создание изображения из бинарных данных
         file_name = f"{file_stem}.png"
-        out_path = IMG_DIR / file_name
+        out_path = IMG_DIR / file_name  # Путь к файлу
         image.save(out_path)
         print(f"PNG сохранён: {out_path}")
         return str(out_path)
@@ -244,13 +290,22 @@ def save_phone_png_from_data_uri(data_uri: str, file_stem: str) -> str | None:
 
 
 def get_avito_id_from_url(url: str) -> str:
+    '''
+    Извлекает ID объявления из URL Avito.
+    Arg: url объявления Avito
+    Return: ID объявления или timestamp если ID не найден
+    '''
     m = re.search(r"(\d{7,})", url)
     return m.group(1) if m else str(int(time.time()))
 
 
 def try_click(page: Page, el) -> bool:
+    '''
+    Пытается кликнуть на элемент различными способами.
+    Return: True если клик выполнен успешно
+    '''
     try:
-        el.scroll_into_view_if_needed()
+        el.scroll_into_view_if_needed()  # Прокрутка страницы к элементу
     except Exception:
         pass
     human_hover(page, el)
@@ -260,20 +315,23 @@ def try_click(page: Page, el) -> bool:
         human_sleep(*HUMAN["post_click_pause_s"])
         return True
     except Exception:
-        try:
+        try:  # Попытка альтернативного клика через JavaScript
             box = el.bounding_box() or {}
             if box:
-                page.mouse.move(box.get("x", 0) + 6, box.get("y", 0) + 6)
+                page.mouse.move(box.get("x", 0) + 6, box.get("y", 0) + 6)  # Перемещение мыши к элементу со смещением
                 human_sleep(*HUMAN["pre_click_pause_s"])
-            page.evaluate("(e)=>e.click()", el)
+            page.evaluate("(e)=>e.click()", el)  # Клик через JS
             human_sleep(*HUMAN["post_click_pause_s"])
             return True
         except Exception:
             return False
 
 
-# ПРОВЕРКА "ЛИМИТ КОНТАКТОВ"
 def is_limit_contacts_modal(page: Page) -> bool:
+    '''
+    Проверяет наличие модального окна о лимите контактов.
+    Return: True если обнаружено сообщение о лимите контактов
+    '''
     html = safe_get_content(page).lower()
     if "закончился лимит" in html and "просмотр контактов" in html:
         return True
@@ -306,22 +364,22 @@ UNAVAILABLE_MARKERS = [
 
 
 def classify_ad_status(page: Page) -> str:
-    """
-    'ok' | 'no_calls' | 'on_review' | 'unavailable' | 'blocked' | 'limit'
-    """
+    '''
+    Определяет статус объявления по содержимому страницы.
+    Return: Строка с статусом: 'ok' | 'no_calls' | 'on_review' | 'unavailable' | 'blocked' | 'limit'
+    '''
     if is_captcha_or_block(page):
         return "blocked"
 
     html = safe_get_content(page).lower()
 
-    if is_limit_contacts_modal(page):
+    checking = {'MODERATION_MARKERS':"on_review", 'UNAVAILABLE_MARKERS':"unavailable", 'NO_CALLS_MARKERS':"no_calls"}
+    
+    if is_limit_contacts_modal(page):  # Проверка лимита контактов
         return "limit"
-    if any(m in html for m in MODERATION_MARKERS):
-        return "on_review"
-    if any(m in html for m in UNAVAILABLE_MARKERS):
-        return "unavailable"
-    if any(m in html for m in NO_CALLS_MARKERS):
-        return "no_calls"
+    for mode, return_text in checking.items():
+        if any(m in html for m in mode):
+            return return_text  # Проверка модерации, доступности, режима "без звонков"
 
     try:
         if page.locator("text=Без звонков").first.is_visible():
@@ -329,28 +387,34 @@ def classify_ad_status(page: Page) -> str:
     except Exception:
         pass
 
-    return "ok"
+    return "ok"  # Возвращаем 'ok', если проблем не обнаружено
 
-
-# ВХОДНЫЕ URL ИЗ Excel/CSV
 
 def read_urls_from_excel_or_csv(path: Path, sheet=None, url_column=None) -> list[str]:
-    url_re = re.compile(r'https?://(?:www\.)?avito\.ru/[^\s"]+')
+    '''
+    Читает URL объявлений из Excel или CSV файла.
+    Args:
+        path: Путь к файлу
+        sheet: Имя листа Excel (None для всех листов)
+        url_column: Имя колонки с URL (None для поиска во всех колонках)
+    Return: Список уникальных URL
+    '''
+    url_re = re.compile(r'https?://(?:www\.)?avito\.ru/[^\s"]+')  # Регулярка для поиска URL Avito
     urls: list[str] = []
 
     if path.suffix.lower() in {".xlsx", ".xls"}:
-        xls = pd.ExcelFile(path)
-        sheets = [sheet] if sheet is not None else xls.sheet_names
+        xls = pd.ExcelFile(path)  # Создание объекта Excel
+        sheets = [sheet] if sheet is not None else xls.sheet_names  # Определение листов для обработки
         for sh in sheets:
-            df = xls.parse(sh, dtype=str)
+            df = xls.parse(sh, dtype=str)  # Чтение листа как DataFrame
             if url_column and url_column in df.columns:
-                col = df[url_column].dropna().astype(str)
-                urls.extend(col.tolist())
-            else:
+                col = df[url_column].dropna().astype(str)  # Получение колонки и удаление пустых значений
+                urls.extend(col.tolist())  # Добавление значений в список URL
+            else:  # Если колонка не указана
                 for col in df.columns:
-                    s = df[col].dropna().astype(str)
+                    s = df[col].dropna().astype(str)  # Получение колонки как строки
                     for val in s:
-                        urls.extend(url_re.findall(val))
+                        urls.extend(url_re.findall(val))  # Поиск URL в значении
     elif path.suffix.lower() in {".csv", ".txt"}:
         df = pd.read_csv(path, dtype=str, sep=None, engine="python")
         if url_column and url_column in df.columns:
@@ -365,30 +429,32 @@ def read_urls_from_excel_or_csv(path: Path, sheet=None, url_column=None) -> list
         raise ValueError("Поддерживаются .xlsx/.xls/.csv/.txt")
 
     cleaned = []
-    seen = set()
+    seen = set()  # Инициализация множества для отслеживания уникальных URL
     for u in urls:
         u = u.strip()
         if not u.startswith("http"):
             u = urljoin("https://www.avito.ru", u)
-        u = u.split("#", 1)[0]
-        u = u.split("?", 1)[0]
-        if u not in seen:
+        u = u.split("#", 1)[0]  # Удаление якорей
+        u = u.split("?", 1)[0]  # Удаление параметров запроса
+        if u not in seen:  # Проверка уникальности URL
             seen.add(u)
             cleaned.append(u)
     return cleaned
 
 
-# БЕЗОПАСНОЕ СОХРАНЕНИЕ / ЧТЕНИЕ ПРОГРЕССА
-
 def atomic_write_json(path: Path, data):
-    tmp = path.with_suffix(path.suffix + f".tmp_{int(time.time()*1000)}_{random.randint(1000,9999)}")
-    payload = json.dumps(data, ensure_ascii=False, indent=2)
-    tmp.write_text(payload, encoding="utf-8")
-    attempts, delay = 10, 0.1
-    for _ in range(attempts):
+    '''
+    Атомарно записывает данные в JSON файл с использованием временного файла.
+    Arg: data: Данные для записи
+    '''
+    tmp = path.with_suffix(path.suffix + f".tmp_{int(time.time()*1000)}_{random.randint(1000,9999)}")  # Создание уникального имени временного файла
+    payload = json.dumps(data, ensure_ascii=False, indent=2)  # Преобразование данных в JSON строку
+    tmp.write_text(payload, encoding="utf-8") 
+    attempts, delay = 10, 0.1  # Настройки попыток замены файла
+    for _ in range(attempts):  # Цикл попыток замены файла
         try:
-            os.replace(tmp, path)
-            return
+            os.replace(tmp, path)  # Атомарная замена файла
+            return  # Выход при успехе
         except PermissionError:
             time.sleep(delay)
             delay = min(delay * 1.7, 1.0)
@@ -402,15 +468,23 @@ def atomic_write_json(path: Path, data):
 
 
 def load_progress(path: Path) -> dict[str, str]:
-    if path.exists():
+    '''
+    Загружает прогресс парсинга из JSON файла.
+    Return: Словарь с прогрессом или пустой словарь при ошибке
+    '''
+    if path.exists():  # Проверка существования файла
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))  # Загрузка JSON данных
         except Exception as e:
             print(f"Не удалось прочитать существующий прогресс: {e}")
     return {}
 
 
 def load_pending(path: Path) -> list[str]:
+    '''
+    Загружает список отложенных ссылок из JSON файла.
+    Return: Список URL или пустой список при ошибке
+    '''
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -421,17 +495,23 @@ def load_pending(path: Path) -> list[str]:
 
 
 def save_pending(path: Path, urls: list[str]):
+    '''
+    Сохраняет список отложенных ссылок в JSON файл.
+    '''
     urls = list(dict.fromkeys(urls))  # Уникальные, порядок сохраняем
     atomic_write_json(path, urls)
 
 
 def dump_debug(page: Page, url: str):
+    '''
+    Сохраняет скриншот и HTML проблемной страницы для отладки.
+    '''
     try:
-        ad_id = get_avito_id_from_url(url)
-        png_path = DEBUG_DIR / f"{ad_id}.png"
+        ad_id = get_avito_id_from_url(url)  # Получение ID объявления из URL
+        png_path = DEBUG_DIR / f"{ad_id}.png"  # Пути
         html_path = DEBUG_DIR / f"{ad_id}.html"
-        page.screenshot(path=str(png_path), full_page=True)
-        html = safe_get_content(page)
+        page.screenshot(path=str(png_path), full_page=True)  # Создание скриншота всей страницы
+        html = safe_get_content(page)  # Получение HTML содержимого
         html_path.write_text(html, encoding="utf-8")
         print(f"🪪 Debug сохранён: {png_path.name}, {html_path.name}")
     except Exception as e:
@@ -763,7 +843,7 @@ def main():
 
         browser = p.chromium.launch(**launch_kwargs)
 
-        vp_w = random.randint(1200, 1368)
+        vp_w = random.randint(1200, 1400)
         vp_h = random.randint(760, 900)
 
         context = browser.new_context(

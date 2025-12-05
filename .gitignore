@@ -9,6 +9,14 @@ __pycache__/
 # C extensions
 *.so
 
+#bugs
+avito_phones_playwright/debug/
+avito_phones_playwright/phones/
+
+# output
+phones_output.xlsx
+avito_phones_playwright/pending_review.json
+
 # Distribution / packaging
 .Python
 build/
