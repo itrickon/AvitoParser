@@ -1,14 +1,15 @@
 import os, signal, atexit, re
-import json, time, random
+import json, asyncio, random
 from base64 import b64decode
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urljoin
+import time
 
 import pandas as pd
 from PIL import Image
-from playwright.sync_api import (
-    sync_playwright,
+from playwright.async_api import (
+    async_playwright,
     Page,
     TimeoutError as PWTimeoutError,
     Error as PWError,
@@ -35,13 +36,11 @@ HEADLESS = False                                             # False = брау�
 
 # ОБЪЁМ И ПАРАЛЛЕЛЬНОСТЬ
 TEST_TOTAL = 766  # Максимум объявлений за один запуск (обрежется по списку ссылок)
-CONCURRENCY = 3   # Количество одновременно открытых вкладок браузера (2–3 оптимально)
-
+CONCURRENCY = 4   # Количество одновременно открытых вкладок браузера (2–3 оптимально)
 
 # БАЗОВЫЕ ТАЙМАУТЫ
-CLICK_DELAY = 8       # Базовая задержка в секундах перед ожиданием появления номера телефона
-NAV_TIMEOUT = 90_000  # Таймаут загрузки страницы, мс (90 секунд)
-
+CLICK_DELAY = 3       # Базовая задержка в секундах перед ожиданием появления номера телефона
+NAV_TIMEOUT = 35_000  # Таймаут загрузки страницы, мс (45 секунд)
 
 # НАСТРОЙКИ ПРОКСИ
 USE_PROXY = False                # True = использовать прокси, False = напрямую
@@ -51,12 +50,11 @@ PROXY_LOGIN = "YT4aBK"           # Логин для авторизации на
 PROXY_PASSWORD = "nUg2UTut9UMU"  # Пароль для авторизации на прокси
 
 # ПОВЕДЕНИЕ (МЕДЛЕННЕЕ И ЕСТЕСТВЕНЕЕ)
-PAGE_DELAY_BETWEEN_BATCHES = (2.4, 5.2, )    # Пауза между партиями ссылок (раньше была (2.0, 4.0))
-NAV_STAGGER_BETWEEN_TABS = (0.45, 1.35, )    # Пауза перед открытием КАЖДОЙ вкладки (чтобы не стартовали все разом)
-POST_NAV_IDLE = (0.45, 1.05,)                # Небольшая «заминка» после загрузки страницы перед действиями
+PAGE_DELAY_BETWEEN_BATCHES = (2.0, 4.0, )    # Пауза между партиями ссылок
+NAV_STAGGER_BETWEEN_TABS = (0.35, 1.0, )    # Пауза перед открытием КАЖДОЙ вкладки (чтобы не стартовали все разом)
+POST_NAV_IDLE = (0.25, 1.0,)                # Небольшая «заминка» после загрузки страницы перед действиями
 BATCH_CONCURRENCY_JITTER = (True)            # Иногда работаем 2 вкладками вместо 3 для естественности
 CLOSE_STAGGER_BETWEEN_TABS = (0.25, 0.75, )  # Вкладки закрываем с небольшой случайной паузой
-
 
 # USER-AGENT браузера
 UA = (
@@ -77,12 +75,11 @@ HUMAN = {
     "mouse_wiggle_steps": (2, 5),             # Сколько шагов «подёргиваний» мыши
     "between_actions_pause": (0.10, 0.30, ),  # Пауза между действиями (скролл, клик, наведение)
     "click_delay_jitter": (
-        CLICK_DELAY * 0.9,
-        CLICK_DELAY * 1.25,
+        CLICK_DELAY * 0.45,
+        CLICK_DELAY * 1.0,
     ),  # Случайная задержка после клика по телефону (min и max)
     "randomize_selectors": True,  # Флаг случайного изменения порядка селекторов
 }
-
 
 # Теги в phones_map.json при пропусках
 TAG_NO_CALLS = "__SKIP_NO_CALLS__"        # Объявление «без звонков» / только сообщения
@@ -90,26 +87,23 @@ TAG_UNAVAILABLE = "__SKIP_UNAVAILABLE__"  # Объявление закрыто/
 TAG_ON_REVIEW = "__SKIP_ON_REVIEW__"      # Объявление ещё на модерации
 TAG_LIMIT = "__SKIP_LIMIT__"              # Закончился лимит показа контактов на аккаунте
 
-
 # ХЕЛПЕРЫ
 
-def human_sleep(a: float, b: float):
+async def human_sleep(a: float, b: float):
     '''
-    Приостанавливает выполнение на случайное количество секунд в диапазоне [a, b].
+    Асинхронная случайная задержка
     Используется для имитации человеческих пауз и предотвращения блокировок!
     '''
-    time.sleep(random.uniform(a, b))
+    await asyncio.sleep(random.uniform(a, b))
 
-
-def human_pause_jitter():
+async def human_pause_jitter():
     '''
     Короткая пауза между действиями на основе настройки HUMAN["between_actions_pause"].
     Добавляет естественности поведению скрипта.
     '''
-    human_sleep(*HUMAN["between_actions_pause"])
+    await human_sleep(*HUMAN["between_actions_pause"])
 
-
-def human_scroll_jitter(page: Page, count: int | None = None):
+async def human_scroll_jitter(page: Page, count: int | None = None):
     '''
     Имитирует человеческий скроллинг страницы.
     Выполняет случайное количество скроллов со случайным шагом и направлением.
@@ -117,20 +111,20 @@ def human_scroll_jitter(page: Page, count: int | None = None):
     count: Количество скроллов
     '''
     if count is None:
-        count = random.randint(*HUMAN["pre_page_warmup_scrolls"]) # Случайное количество скролов
+        count = random.randint(*HUMAN["pre_page_warmup_scrolls"])  # Случайное количество скролов
     try:
-        height = page.evaluate("() => document.body.scrollHeight") or 3000
+        height = await page.evaluate("() => document.body.scrollHeight") or 3000
         for _ in range(count):
             step = random.randint(*HUMAN["scroll_step_px"])
             direction = 1 if random.random() > 0.25 else -1
-            y = max(0, min(height, page.evaluate("() => window.scrollY") + step * direction))
-            page.evaluate("y => window.scrollTo({top: y, behavior: 'smooth'})", y)  # Плавный скролл через JavaScript
-            human_sleep(*HUMAN["scroll_pause_s"])
+            current_y = await page.evaluate("() => window.scrollY")
+            y = max(0, min(height, current_y + step * direction))
+            await page.evaluate("y => window.scrollTo({top: y, behavior: 'smooth'})", y)  # Плавный скролл через JavaScript
+            await human_sleep(*HUMAN["scroll_pause_s"])
     except Exception:
         pass
 
-
-def human_wiggle_mouse(page: Page, x: float, y: float):
+async def human_wiggle_mouse(page: Page, x: float, y: float):
     '''
     Имитирует мелкие случайные движения мыши вокруг указанных координат.
     Добавляет реалистичности наведению мыши.
@@ -141,46 +135,42 @@ def human_wiggle_mouse(page: Page, x: float, y: float):
         dx = random.randint(-amp, amp)  # Смещения x и y
         dy = random.randint(-amp, amp)
         try:
-            page.mouse.move(x + dx, y + dy)
+            await page.mouse.move(x + dx, y + dy)
         except Exception:
             pass
-        human_pause_jitter()  # Пауза между движениями
+        await human_pause_jitter()  # Пауза между движениями
 
-
-def human_hover(page: Page, el):
+async def human_hover(page: Page, el):
     '''
     Имитирует человеческое наведение мыши на элемент.
     Вычисляет центр элемента, добавляет случайное смещение и вибрацию мыши.
     el: Элемент для наведения
     '''
     try:
-        box = el.bounding_box()  # Получение координат и размеров элемента
+        box = await el.bounding_box()  # Получение координат и размеров элемента
         if not box:
             return
         cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)  # Корды x, y в пределах элемента
         cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
-        page.mouse.move(cx, cy)
-        human_wiggle_mouse(page, cx, cy)
-        human_sleep(*HUMAN["hover_pause_s"])
+        await page.mouse.move(cx, cy)
+        await human_wiggle_mouse(page, cx, cy)
+        await human_sleep(*HUMAN["hover_pause_s"])
     except Exception:
         pass
 
-
-def safe_get_content(page: Page) -> str:
+async def safe_get_content(page: Page) -> str:
     '''
     Безопасно получает HTML-содержимое страницы с одной попыткой повторения.
     Return: HTML-код страницы или пустая строка при ошибке
     '''
     for _ in range(2):
         try:
-            return page.content()
+            return await page.content()
         except PWError:  # Обработка ошибок Playwright
-            time.sleep(1)
+            await asyncio.sleep(1)
     return ""
 
-
-
-def is_captcha_or_block(page: Page) -> bool:
+async def is_captcha_or_block(page: Page) -> bool:
     '''
     Проверка на капчу. 
     Return: True если обнаружены признаки блокировки или капчи
@@ -189,15 +179,14 @@ def is_captcha_or_block(page: Page) -> bool:
         url = page.url.lower()  # Получение URL
     except PWError:
         url = ""
-    html = safe_get_content(page).lower()  # Получение HTML
+    html = (await safe_get_content(page)).lower()  # Получение HTML
     return (
         "captcha" in url or 
         "firewall" in url or
         "доступ с вашего ip-адреса временно ограничен" in html
     )
 
-
-def close_city_or_cookie_modals(page: Page):
+async def close_city_or_cookie_modals(page: Page):
     '''
     Закрывает всплывающие модальные окна (укажите город; куки; уведомления).
     Пытается найти и кликнуть на кнопки закрытия по различным селекторам.
@@ -213,19 +202,19 @@ def close_city_or_cookie_modals(page: Page):
     ]
     for sel in selectors:  # Цикл по всем селекторам
         try:
-            for b in page.query_selector_all(sel):  # Поиск всех элементов по селектору
+            buttons = await page.query_selector_all(sel)  # Поиск всех элементов по селектору
+            for b in buttons:
                 try:
-                    if b.is_visible():  # Проверка видимости элемента
-                        human_hover(page, b)
-                        b.click()
-                        human_sleep(0.25, 0.7)
+                    if await b.is_visible():  # Проверка видимости элемента
+                        await human_hover(page, b)
+                        await b.click()
+                        await human_sleep(0.25, 0.5)
                 except Exception:
                     continue
         except Exception:
             continue
 
-
-def close_login_modal_if_exists(page: Page) -> bool:
+async def close_login_modal_if_exists(page: Page) -> bool:
     '''
     Пытается закрыть окно авторизации, если оно появилось.
     Return: True если модальное окно было найдено и попытка закрытия выполнена
@@ -244,20 +233,19 @@ def close_login_modal_if_exists(page: Page) -> bool:
     ]  # Селекторы закрытия
     for sel in selectors_modal:
         try:
-            modals = page.query_selector_all(sel)  # Поиск всех модальных окон по селектору
+            modals = await page.query_selector_all(sel)  # Поиск всех модальных окон по селектору
         except PWError:
             continue
         for m in modals:
-            if not m.is_visible():
+            if not await m.is_visible():
                 continue
             for btn_sel in close_selectors:
-                btn = m.query_selector(btn_sel)  # Поиск кнопки закрытия внутри модального окна
-                if btn and btn.is_enabled():
+                btn = await m.query_selector(btn_sel)  # Поиск кнопки закрытия внутри модального окна
+                if btn and await btn.is_enabled():
                     try:
-                        human_hover(page, btn)
-                        human_sleep(*HUMAN["pre_click_pause_s"])
-                        btn.click()
-                        human_sleep(*HUMAN["post_click_pause_s"])
+                        await human_hover(page, btn)
+                        await human_sleep(*HUMAN["pre_click_pause_s"])
+                        await btn.click()
                         print("Модалка авторизации закрыта, объявление пропущено.")
                         return True
                     except Exception:
@@ -265,7 +253,6 @@ def close_login_modal_if_exists(page: Page) -> bool:
             print("Модалка авторизации не закрывается — объявление пропускаем.")
             return True
     return False
-
 
 def save_phone_png_from_data_uri(data_uri: str, file_stem: str) -> str | None:
     '''
@@ -288,7 +275,6 @@ def save_phone_png_from_data_uri(data_uri: str, file_stem: str) -> str | None:
         print(f"Ошибка при сохранении PNG: {e}")
         return None
 
-
 def get_avito_id_from_url(url: str) -> str:
     '''
     Извлекает ID объявления из URL Avito.
@@ -298,51 +284,47 @@ def get_avito_id_from_url(url: str) -> str:
     m = re.search(r"(\d{7,})", url)
     return m.group(1) if m else str(int(time.time()))
 
-
-def try_click(page: Page, el) -> bool:
+async def try_click(page: Page, el) -> bool:
     '''
     Пытается кликнуть на элемент различными способами.
     Return: True если клик выполнен успешно
     '''
     try:
-        el.scroll_into_view_if_needed()  # Прокрутка страницы к элементу
+        await el.scroll_into_view_if_needed()  # Прокрутка страницы к элементу
     except Exception:
         pass
-    human_hover(page, el)
-    human_sleep(*HUMAN["pre_click_pause_s"])
+    await human_hover(page, el)
+    await human_sleep(*HUMAN["pre_click_pause_s"])
     try:
-        el.click()
-        human_sleep(*HUMAN["post_click_pause_s"])
+        await el.click()
+        await human_sleep(*HUMAN["post_click_pause_s"])
         return True
     except Exception:
         try:  # Попытка альтернативного клика через JavaScript
-            box = el.bounding_box() or {}
+            box = await el.bounding_box() or {}
             if box:
-                page.mouse.move(box.get("x", 0) + 6, box.get("y", 0) + 6)  # Перемещение мыши к элементу со смещением
-                human_sleep(*HUMAN["pre_click_pause_s"])
-            page.evaluate("(e)=>e.click()", el)  # Клик через JS
-            human_sleep(*HUMAN["post_click_pause_s"])
+                await page.mouse.move(box.get("x", 0) + 6, box.get("y", 0) + 6)  # Перемещение мыши к элементу со смещением
+                await human_sleep(*HUMAN["pre_click_pause_s"])
+            await page.evaluate("(e)=>e.click()", el)  # Клик через JS
             return True
         except Exception:
             return False
 
-
-def is_limit_contacts_modal(page: Page) -> bool:
+async def is_limit_contacts_modal(page: Page) -> bool:
     '''
     Проверяет наличие модального окна о лимите контактов.
     Return: True если обнаружено сообщение о лимите контактов
     '''
-    html = safe_get_content(page).lower()
+    html = (await safe_get_content(page)).lower()
     if "закончился лимит" in html and "просмотр контактов" in html:
         return True
     try:
-        loc = page.locator("text=Купить контакты").first
+        loc = await page.locator("text=Купить контакты").first
         if loc.is_visible():
             return True
     except Exception:
         pass
     return False
-
 
 # КЛАССИФИКАЦИЯ СТРАНИЦЫ ОБЪЯВЛЕНИЯ
 NO_CALLS_MARKERS = [
@@ -362,19 +344,18 @@ UNAVAILABLE_MARKERS = [
     "объявление больше не доступно",
 ]
 
-
-def classify_ad_status(page: Page) -> str:
+async def classify_ad_status(page: Page) -> str:
     '''
     Определяет статус объявления по содержимому страницы.
     Return: Строка с статусом: 'ok' | 'no_calls' | 'on_review' | 'unavailable' | 'blocked' | 'limit'
     '''
-    if is_captcha_or_block(page):
+    if await is_captcha_or_block(page):
         return "blocked"
 
-    html = safe_get_content(page).lower()
-
+    html = (await safe_get_content(page)).lower()
+    
     # Проверка лимита контактов
-    if is_limit_contacts_modal(page):
+    if await is_limit_contacts_modal(page):
         return "limit"
     
     # Проверка модерации
@@ -390,13 +371,12 @@ def classify_ad_status(page: Page) -> str:
         return "no_calls"
 
     try:
-        if page.locator("text=Без звонков").first.is_visible():
+        if await page.locator("text=Без звонков").first.is_visible():
             return "no_calls"
     except Exception:
         pass
 
     return "ok"  # Возвращаем 'ok', если проблем не обнаружено
-
 
 def read_urls_from_excel_or_csv(path: Path, sheet=None, url_column=None) -> list[str]:
     '''
@@ -449,7 +429,6 @@ def read_urls_from_excel_or_csv(path: Path, sheet=None, url_column=None) -> list
             cleaned.append(u)
     return cleaned
 
-
 def atomic_write_json(path: Path, data):
     '''
     Атомарно записывает данные в JSON файл с использованием временного файла.
@@ -474,7 +453,6 @@ def atomic_write_json(path: Path, data):
     except Exception as e:
         print(f"Критическая ошибка записи прогресса: {e}")
 
-
 def load_progress(path: Path) -> dict[str, str]:
     '''
     Загружает прогресс парсинга из JSON файла.
@@ -486,7 +464,6 @@ def load_progress(path: Path) -> dict[str, str]:
         except Exception as e:
             print(f"Не удалось прочитать существующий прогресс: {e}")
     return {}
-
 
 def load_pending(path: Path) -> list[str]:
     '''
@@ -501,7 +478,6 @@ def load_pending(path: Path) -> list[str]:
             pass
     return []
 
-
 def save_pending(path: Path, urls: list[str]):
     '''
     Сохраняет список отложенных ссылок в JSON файл.
@@ -509,8 +485,7 @@ def save_pending(path: Path, urls: list[str]):
     urls = list(dict.fromkeys(urls))  # Уникальные, порядок сохраняем
     atomic_write_json(path, urls)
 
-
-def dump_debug(page: Page, url: str):
+async def dump_debug(page: Page, url: str):
     '''
     Сохраняет скриншот и HTML проблемной страницы для отладки.
     '''
@@ -518,22 +493,21 @@ def dump_debug(page: Page, url: str):
         ad_id = get_avito_id_from_url(url)     # Получение ID объявления из URL
         png_path = DEBUG_DIR / f"{ad_id}.png"  # Пути
         html_path = DEBUG_DIR / f"{ad_id}.html"
-        page.screenshot(path=str(png_path), full_page=True)  # Создание скриншота всей страницы
-        html = safe_get_content(page)  # Получение HTML содержимого
+        await page.screenshot(path=str(png_path), full_page=True)  # Создание скриншота всей страницы
+        html = await safe_get_content(page)  # Получение HTML содержимого
         html_path.write_text(html, encoding="utf-8")
         print(f"🪪 Debug сохранён: {png_path.name}, {html_path.name}")
     except Exception as e:
         print(f"Не удалось сохранить debug: {e}")
 
-
 # ЛОГИКА КЛИКА / ИЗВЛЕЧЕНИЯ
 
-def click_show_phone_on_ad(page: Page) -> bool:
+async def click_show_phone_on_ad(page: Page) -> bool:
     '''
     Пытается найти и кликнуть на кнопку "Показать телефон" в объявлении.
     Return: True если кнопка найдена и клик выполнен
     '''
-    human_scroll_jitter(page)
+    await human_scroll_jitter(page)
 
     for anchor in [
         "[data-marker='seller-info']",
@@ -542,24 +516,16 @@ def click_show_phone_on_ad(page: Page) -> bool:
         "section:has(button:has-text('Показать'))",
     ]:
         try:
-            a = page.query_selector(anchor)  # Поиск якорного элемента
+            a = await page.query_selector(anchor)  # Поиск якорного элемента
             if a:
-                a.scroll_into_view_if_needed()  # Прокрутка к элементу, если элемент найден
-                human_sleep(*HUMAN["scroll_pause_s"])
+                await a.scroll_into_view_if_needed()  # Прокрутка к элементу, если элемент найден
                 break
         except Exception:
             pass
 
     selector_groups = [
-        [  # data-marker селекторы
-            "button[data-marker='item-phone-button']",
-            "button[data-marker='phone-button/number']",
-            "button[data-marker*='phone-button']",
-        ],
-        [  # Текстовые селекторы
-            "button:has-text('Показать телефон')",
-            "button:has-text('Показать номер')",
-        ],
+        ["button[data-marker='item-phone-button']", "button[data-marker='phone-button/number']"],
+        ["button:has-text('Показать телефон')", "button:has-text('Показать номер')", "button:has-text('Позвонить через Авито')"],
     ]
 
     if HUMAN["randomize_selectors"]:
@@ -568,22 +534,22 @@ def click_show_phone_on_ad(page: Page) -> bool:
             random.shuffle(g)  # Перемешивание селекторов внутри группы
 
     try:
-        page.wait_for_selector("button", timeout=2000)
+        await page.wait_for_selector("button", timeout=2000)
     except Exception:
         pass
 
     for group in selector_groups:
         for sel in group:
             try:
-                el = page.query_selector(sel)
-                if el and el.is_visible() and el.is_enabled():
-                    if try_click(page, el):
+                el = await page.query_selector(sel)
+                if el and await el.is_visible() and await el.is_enabled():
+                    if await try_click(page, el):
                         print("Нажали 'Показать телефон'.")
                         
                         # Ждем появление номера или модалки авторизации
                         try:
                             # Ждем либо номер телефона, либо модалку авторизации
-                            page.wait_for_selector(
+                            await page.wait_for_selector(
                                 "img[data-marker='phone-image'], [data-marker='login-form']", 
                                 timeout=5000
                             )
@@ -591,7 +557,7 @@ def click_show_phone_on_ad(page: Page) -> bool:
                             pass
                         
                         # Проверяем, появилась ли модалка авторизации
-                        if page.query_selector("[data-marker='login-form']"):
+                        if await page.query_selector("[data-marker='login-form']"):
                             print("Обнаружена модалка авторизации после клика")
                             return False
                         
@@ -602,42 +568,42 @@ def click_show_phone_on_ad(page: Page) -> bool:
     print("Кнопка 'Показать телефон' не найдена.")
     return False
 
-def extract_phone_data_uri_on_ad(page: Page) -> str | None:
+async def extract_phone_data_uri_on_ad(page: Page) -> str | None:
     '''
     Извлекает data:image URI с изображением телефона со страницы. 
     Return: data:image URI или None если изображение не найдено
     '''
     try:  # Попытка поиска изображения телефона
-        img = page.query_selector("img[data-marker='phone-image']")  # Поиск изображения по data-maker
+        img = await page.query_selector("img[data-marker='phone-image']")  # Поиск изображения по data-maker
     except PWError:
         img = None
 
-    if not img or not img.is_visible():
+    if not img or not await img.is_visible():
         print("Картинка с номером не найдена.")
         return None
 
-    # Получаем src атрибут
     try:
-        src = img.get_attribute("src") or ""
+        src = await img.get_attribute("src") or ""
     except Exception:
-        img = None
+        src = ""
     if not src.startswith("data:image"):
         print(f"src не data:image, а: {src[:60]}...")
         return None
     return src
 
-
 # ПУЛ ВКЛАДОК (ТАБОВ) И ОБРАБОТКА СПИСКОВ
 
-def make_page_pool(context, size: int) -> list[Page]:
+async def make_page_pool(context, size: int) -> list[Page]:
     '''
     Создает пул страниц браузера.
     Return: Список объектов Page
     '''
-    return [context.new_page() for _ in range(size)]  # Создание списка страниц
+    pages = []
+    for _ in range(size):
+        pages.append(await context.new_page())
+    return pages
 
-
-def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: list[str]):
+async def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: list[str]):
     '''
     Обрабатывает список URL с использованием пула страниц.
     Args:
@@ -648,13 +614,12 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
     '''
     if not urls:
         return
-
+    
     # Пул создаём максимального размера; часть вкладок можем не использовать
-    pages = make_page_pool(context, CONCURRENCY)
+    pages = await make_page_pool(context, CONCURRENCY)
     try:
-        it = iter(urls)  # Итератор по URL
+        it = iter(urls)
         while True:
-            # Иногда делаем партию меньше максимума, чтобы поведение было менее ровным
             batch_size = (
                 random.randint(max(1, CONCURRENCY - 1), CONCURRENCY)
                 if BATCH_CONCURRENCY_JITTER
@@ -662,30 +627,44 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
             )
             batch_pages = pages[:batch_size]
 
-            batch = []  # Инициализация списка для текущей партии
-            for idx, p in enumerate(batch_pages):  # Цикл по страницам партии
+            batch = []
+            # 1. Сначала собираем все URL для партии
+            for p in batch_pages:
                 try:
                     url = next(it)
                 except StopIteration:
-                    return
+                    break
                 batch.append((url, p))
-
-                # Не открываем все вкладки синхронно — ставим паузу перед каждым goto
-                human_sleep(*NAV_STAGGER_BETWEEN_TABS)
-                try:
-                    p.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
-                except PWTimeoutError:
-                    print(f"Таймаут: {url}")
+            
+            if not batch:
+                return
+            
+            # 2. ПАРАЛЛЕЛЬНАЯ загрузка всех страниц в партии
+            navigation_tasks = []
+            for url, p in batch:
+                # Меньшая пауза или вообще без паузы для параллельной загрузки
+                navigation_tasks.append(p.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT))
+            
+            # Ждем завершения всех загрузок
+            results = await asyncio.gather(*navigation_tasks, return_exceptions=True)
+            
+            # 3. Обрабатываем результаты загрузок
+            for (url, p), result in zip(batch, results):
+                if isinstance(result, Exception):
+                    if isinstance(result, PWTimeoutError):
+                        print(f"Таймаут: {url}")
+                    else:
+                        print(f"Ошибка загрузки {url}: {result}")
+                    batch.remove((url, p))  # Удаляем неудачные
                     continue
-
-                # Лёгкая «заминка» после навигации + пара скроллов
-                human_sleep(*POST_NAV_IDLE)
-                human_scroll_jitter(p, count=random.randint(1, 2))
-
+                
+                await human_sleep(*POST_NAV_IDLE)
+                await human_scroll_jitter(p, count=random.randint(1, 2))
+                
             # Статус + модалки + попытка клика (тоже чуть «размазываем»)
             for url, p in batch:
-                human_pause_jitter()
-                st = classify_ad_status(p)
+                await human_pause_jitter()
+                st = await classify_ad_status(p)
                 if st == "blocked":
                     print(f"Капча/блок: {url}")
                     continue
@@ -707,10 +686,9 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
                     on_result(url, TAG_ON_REVIEW)
                     pending_queue.append(url)
                     continue
-                close_city_or_cookie_modals(p)
-                if not click_show_phone_on_ad(p):
-                    # Проверим ещё раз — вдруг это всё же on_review/limit/и т.д.
-                    st2 = classify_ad_status(p)
+                await close_city_or_cookie_modals(p)
+                if not await click_show_phone_on_ad(p):
+                    st2 = await classify_ad_status(p)
                     if st2 == "limit":
                         on_result(url, TAG_LIMIT)
                         pending_queue.append(url)
@@ -718,42 +696,42 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
                         on_result(url, TAG_UNAVAILABLE)
                     elif st2 == "no_calls":
                         on_result(url, TAG_NO_CALLS)
-                    if st2 == "on_review":
+                    elif st2 == "on_review":
                         on_result(url, TAG_ON_REVIEW)
                         pending_queue.append(url)
                     else:
-                        dump_debug(p, url)
+                        await dump_debug(p, url)
+                        
             # Ждём картинку телефона (с небольшим джиттером между объявлениями)
-            human_sleep(*HUMAN["click_delay_jitter"])
+            await human_sleep(*HUMAN["click_delay_jitter"])
+            
             for url, p in batch:
-                human_pause_jitter()
-                if close_login_modal_if_exists(p) or is_captcha_or_block(p):  # Проверка модалок и блокировок
+                await human_pause_jitter()
+                if await close_login_modal_if_exists(p) or await is_captcha_or_block(p):  # Проверка модалок и блокировок
                     continue  # Пропуск объявления 
-                data_uri = extract_phone_data_uri_on_ad(p)
+                data_uri = await extract_phone_data_uri_on_ad(p)
                 if not data_uri:
                     continue
                 if SAVE_DATA_URI:
                     value = data_uri
                 else:
-                    avito_id = get_avito_id_from_url(url)
-                    out_path = save_phone_png_from_data_uri(data_uri, avito_id)
+                    avito_id = await get_avito_id_from_url(url)
+                    out_path = await save_phone_png_from_data_uri(data_uri, avito_id)
                     if not out_path:  # Проверка успешности сохранения
                         continue
                     value = out_path   # Использование пути к файлу
                 on_result(url, value)  # Сохранение результата
                 print(f"{url} -> {'[data:image...]' if SAVE_DATA_URI else value}")
 
-            human_sleep(*PAGE_DELAY_BETWEEN_BATCHES)  # Пауза между партиями
+            await human_sleep(*PAGE_DELAY_BETWEEN_BATCHES)  # Пауза между партиями
     finally:
         for p in pages:
             try:
-                human_sleep(*CLOSE_STAGGER_BETWEEN_TABS)
-                p.close()  # Закрытие страницы
+                await p.close()  # Закрытие страницы
             except Exception:
                 pass
 
-
-def recheck_pending_once(context, on_result):
+async def recheck_pending_once(context, on_result):
     '''
     Повторно проверяет отложенные ссылки.
     Args:
@@ -764,16 +742,16 @@ def recheck_pending_once(context, on_result):
     if not pend:
         return
     print(f"\nПовторная проверка отложенных ссылок: {len(pend)}")
-    page = context.new_page()  # Создание новой страницы для проверки
+    page = await context.new_page()  # Создание новой страницы для проверки
     still = []  # Список ссылок, которые остаются отложенными
     for url in pend:
         try:
             human_sleep(*NAV_STAGGER_BETWEEN_TABS)  # Пауза перед навигацией
-            page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)  # Переход по URL
+            await page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)  # Переход по URL
         except Exception:
             still.append(url)
             continue
-        st = classify_ad_status(page)
+        st = await classify_ad_status(page)
         if st in ("on_review", "limit"):  # Проверка статусов, требующих повторной проверки
             still.append(url)
         elif st == "no_calls":
@@ -781,11 +759,10 @@ def recheck_pending_once(context, on_result):
         elif st == "unavailable" or st == "blocked":
             on_result(url, TAG_UNAVAILABLE)
         else:
-            # ok: пробуем кликнуть / считать
-            close_city_or_cookie_modals(page)
-            if click_show_phone_on_ad(page):
-                time.sleep(random.uniform(*HUMAN["click_delay_jitter"]))
-                data_uri = extract_phone_data_uri_on_ad(page)
+            await close_city_or_cookie_modals(page)
+            if await click_show_phone_on_ad(page):
+                await human_sleep(*HUMAN["click_delay_jitter"])
+                data_uri = await extract_phone_data_uri_on_ad(page)
                 if data_uri:
                     if SAVE_DATA_URI:  # Режим сохранения data:image
                         on_result(url, data_uri)
@@ -797,29 +774,36 @@ def recheck_pending_once(context, on_result):
                 else:
                     still.append(url)
             else: # Если сейчас стало «без звонков/недоступно»
-                st2 = classify_ad_status(page)
+                st2 = await classify_ad_status(page)
                 if st2 == "no_calls":
                     on_result(url, TAG_NO_CALLS)  # Сохранение результата
                 elif st2 in ("on_review", "limit"):
                     still.append(url)
                 else:
                     on_result(url, TAG_UNAVAILABLE)  # Сохранение как недоступного
-        human_sleep(0.8, 1.6)
+        await human_sleep(0.8, 1.6)
     try:
-        page.close()
+        await page.close()
     except Exception:
         pass
     save_pending(PENDING_JSON, still)
     print(f"Осталось отложенных: {len(still)}")
-
-
+    
+    
+def delete_files_in_folder(folder_path):
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        try:
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            print(f'Ошибка при удалении файла {file_path}. {e}')
+            
 # ОСНОВНОЙ СЦЕНАРИЙ
 
-def main():
-    '''
-    Основная функция парсера.
-    Координирует весь процесс парсинга телефонов с Avito.
-    '''
+async def main():
+    delete_files_in_folder(DEBUG_DIR)  # Удаление файлов в папке debug
+    '''Основная функция парсера.'''
     urls = read_urls_from_excel_or_csv(INPUT_FILE, INPUT_SHEET, URL_COLUMN)
     urls = urls[:TEST_TOTAL]
 
@@ -827,7 +811,6 @@ def main():
     already_done = set(phones_map.keys())
     urls = [u for u in urls if u not in already_done]
 
-    # При старте — сначала очередь pending
     pending_queue = load_pending(PENDING_JSON)
 
     print(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(pending_queue)}")
@@ -853,9 +836,9 @@ def main():
         except Exception:
             pass
 
-    with sync_playwright() as p:  # Создание контекста Playwright
-        launch_kwargs = {         # Параметры запуска браузера
-            "headless": HEADLESS, # Режим отображения браузера
+    async with async_playwright() as p:  # Создание контекста Playwright
+        launch_kwargs = {          # Параметры запуска браузера
+            "headless": HEADLESS,  # Режим отображения браузера
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--start-maximized",  # max размер
@@ -868,24 +851,24 @@ def main():
                 "password": PROXY_PASSWORD,
             }
 
-        browser = p.chromium.launch(**launch_kwargs)  # Запуск браузера Chromium
+        browser = await p.chromium.launch(**launch_kwargs)  # Запуск браузера Chromium
 
         vp_w = random.randint(1200, 1400)
         vp_h = random.randint(760, 900)
 
-        context = browser.new_context(  # Создание нового контекста браузера
+        context = await browser.new_context(  # Создание нового контекста браузера
             viewport={"width": vp_w, "height": vp_h},
             user_agent=UA,  # Установка User-Agent
         )
         context.set_default_navigation_timeout(NAV_TIMEOUT)  # Установка таймаута навигации
         context.set_default_timeout(NAV_TIMEOUT)
-
+        
         # Ручной логин на первой ссылке (если есть что открывать)
         seed_url = pending_queue[0] if pending_queue else (urls[0] if urls else None)
         if seed_url:
-            page = context.new_page() # Создание новой страницы
+            page = await context.new_page() # Создание новой страницы
             try:
-                page.goto(seed_url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
+                await page.goto(seed_url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
             except PWTimeoutError:
                 pass
             print("\nТвои действия:")  # Инструкция пользователю
@@ -893,13 +876,13 @@ def main():
             print(" • залогинься в Авито;")
             print(" • оставь открытую страницу объявления.")
             input("Готов? Нажми Enter в консоли.\n")
-            if is_captcha_or_block(page):
+            if await is_captcha_or_block(page):
                 print("Всё ещё капча/блок — выходим.")
-                browser.close()
+                await browser.close()
                 flush_progress()
                 return
             try:
-                page.close()
+                await page.close()
             except Exception:
                 pass
 
@@ -915,33 +898,29 @@ def main():
             phones_map[url] = value
             atomic_write_json(OUT_JSON, phones_map) # Сохранение прогресса
 
-        # Обработка отложенных ссылок (сняв уже обработанные)
         pending_queue = [u for u in pending_queue if u not in already_done]
         try:
-            process_urls_with_pool(
+            await process_urls_with_pool(
                 context, pending_queue, on_result, pending_queue
             )  # Обработка с добавлением новых отложенных в конец
         except KeyboardInterrupt:
             print("Остановлено пользователем (на pending).")
             flush_progress()  # Сохранение прогресса
-
         # Перепроверка оставшихся отложенных
-        recheck_pending_once(context, on_result)
-
+        await recheck_pending_once(context, on_result)
         # Основной список из Excel
         try:
-            process_urls_with_pool(context, urls, on_result, pending_queue)
+            await process_urls_with_pool(context, urls, on_result, pending_queue)
         except KeyboardInterrupt:
             print("Остановлено пользователем (на основных ссылках).")
             flush_progress()
 
-        browser.close()
+        await browser.close()
         flush_progress()
         print(
             f"\nГотово. В {OUT_JSON} сейчас {len(phones_map)} записей. "
             f"Отложенных осталось: {len(load_pending(PENDING_JSON))}"
         )
 
-
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

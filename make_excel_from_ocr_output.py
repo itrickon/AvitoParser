@@ -8,6 +8,7 @@ from decode_photos import decode_img_phones
 INPUT_JSON = Path("avito_phones_playwright/phones_map.json")
 OUTPUT_XLSX = Path("phones.xlsx")
 
+
 def load_data(path: Path) -> dict:
     if not path.exists():
         print(f"Файл не найден: {path.resolve()}")
@@ -23,6 +24,7 @@ def load_data(path: Path) -> dict:
         print(f"Некорректный JSON в {path}: {e}")
         sys.exit(3)
 
+
 def save_to_excel(url2phone: dict, out_path: Path):
     if not url2phone:
         print("Телефоны не найдены. Excel не создан.")
@@ -31,6 +33,7 @@ def save_to_excel(url2phone: dict, out_path: Path):
     df = pd.DataFrame(rows, columns=["url", "phone"])
     df.to_excel(out_path, index=False)
     print(f"OK: сохранено {len(df)} строк -> {out_path.resolve()}")
+
 
 if __name__ == "__main__":
     data = load_data(INPUT_JSON)
