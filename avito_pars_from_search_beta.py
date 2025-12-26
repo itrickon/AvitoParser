@@ -46,7 +46,7 @@ async def safe_get_content(page: Page) -> str:
 async def is_captcha_or_block(page: Page) -> bool:
     """Быстрая проверка на блокировку"""
     try:
-        url = (await page.url or "").lower()
+        url = (page.url or "").lower()
     except PWError:
         url = ""
     html = (await safe_get_content(page)).lower()
@@ -176,10 +176,8 @@ async def process_single_item(item, page: Page, idx: int, semaphore: asyncio.Sem
                 "button[data-marker='item-phone-button']",
                 "button:has-text('Показать телефон')",
                 "button:has-text('Показать номер')",
-                "button:has-text('Позвонить через Авито')",
                 "button[aria-label*='Показать телефон']",
                 "button[aria-label*='Показать номер']",
-                "button[aria-label*='Позвонить через Авито']",
             ]
             
             phone_button = None
