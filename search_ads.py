@@ -60,7 +60,7 @@ class SearchAvitoAds:
         self.ws.title = "Avito Ads"
         
         # Добавляем заголовки
-        headers = ["ID", "Ссылка на объявление", "Дата парсинга"]
+        headers = ["Ссылка на объявление", "ID"]
         for col, header in enumerate(headers, start=1):
             self.ws.cell(row=1, column=col, value=header)
         
@@ -83,9 +83,8 @@ class SearchAvitoAds:
         
         # Записываем данные
         for i, ad in enumerate(self.ads, start=start_row):
-            ws.cell(row=i, column=1, value=i-1)  # ID (начинаем с 1)
-            ws.cell(row=i, column=2, value=ad)   # Ссылка
-            ws.cell(row=i, column=3, value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))  # Дата парсинга
+            ws.cell(row=i, column=1, value=ad)   # Ссылка
+            ws.cell(row=i, column=2, value=i-1)  # ID (начинаем с 1)
         
         # Сохраняем файл
         wb.save(self.data_saving)
