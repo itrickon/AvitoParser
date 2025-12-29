@@ -1,8 +1,11 @@
-from playwright.sync_api import sync_playwright
-import time
-from openpyxl import Workbook
 import os
+import time
+import re
+import asyncio
+from playwright.async_api import async_playwright
+from openpyxl import Workbook, load_workbook
 from datetime import datetime
+from googletrans import Translator
 
 class SearchAvitoAds:
     def __init__(self, sity, keyword, max_num_ads=10):
@@ -17,21 +20,30 @@ class SearchAvitoAds:
         if os.path.exists(self.data_saving):
             os.remove(self.data_saving)
 
-    def _get_links(self):
+    async def _get_links(self):
         link_selector = '[data-marker="item-title"][href]'
-        found_links = self.page.query_selector_all(link_selector)
-        links = [f'https://www.avito.ru/{link.get_attribute("href")}' for link in found_links]
+        found_links = await self.page.query_selector_all(link_selector)
+        
+        # Используем await для каждого элемента
+        links = []
+        for link in found_links:
+            href = await link.get_attribute("href")
+            links.append(f'https://www.avito.ru/{href}')
+        
         return links
 
-    def _go_to_next_page(self):
+    async def _go_to_next_page(self):
         """Переход на следующую страницу"""
         try:
             # Ищем кнопку "Вперёд" или пагинацию
-            next_button = self.page.query_selector('[aria-label="Следующая страница"]')
-            if next_button and next_button.is_visible():
-                next_button.click()
-                time.sleep(2)  # Ждем загрузки страницы
-                return True
+            next_button = await self.page.query_selector('[aria-label="Следующая страница"]')
+            if next_button:
+                # Проверяем видимость с await
+                is_visible = await next_button.is_visible()
+                if is_visible:
+                    await next_button.click()
+                    await asyncio.sleep(2)  # Используем asyncio.sleep вместо time.sleep
+                    return True
             return False
         except Exception as e:
             print(f"Ошибка при переходе на следующую страницу: {e}")
@@ -63,7 +75,6 @@ class SearchAvitoAds:
             self._create_xlsx()
         
         # Открываем существующий файл
-        from openpyxl import load_workbook
         wb = load_workbook(self.data_saving)
         ws = wb.active
         
@@ -80,23 +91,44 @@ class SearchAvitoAds:
         wb.save(self.data_saving)
         print(f"Данные сохранены в файл: {self.data_saving}")
 
-    def parse_main(self):
+    async def translate_text(self, sity):
+        """Переводим город на английский для удобства"""
+        # Проверяем, является ли слово английским (только латинские буквы)
+        is_english = bool(re.match(r'^[a-zA-Z\s\-]+$', sity))
+        
+        if is_english:
+            # Если уже английское слово, просто форматируем
+            sity_clean = '-'.join(sity.split())
+            return sity_clean.lower()
+        else:
+            # Если русское слово - переводим
+            translator = Translator()
+            try:
+                a = await translator.translate(sity, src="ru", dest="en")
+                a = '-'.join(a.text.split())
+                return a.lower()
+            except Exception as e:
+                print(f"Ошибка перевода: {e}")
+                # Если перевод не удался, используем транслитерацию
+                return '-'.join(sity.lower().split())
+
+    async def parse_main(self):
         # Создаем XLSX файл перед началом парсинга
         self._create_xlsx()
         
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
-            self.context = browser.new_context()
-            self.page = self.context.new_page()
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=False)
+            self.context = await browser.new_context()
+            self.page = await self.context.new_page()
             
+            trans_text = await self.translate_text(self.sity)
             # Формируем URL с городом
-            self.page.goto(f"https://www.avito.ru/{self.sity}?cd=1&q={self.keyword}", wait_until="domcontentloaded")
-            time.sleep(3)  # Ждем полной загрузки
+            await self.page.goto(f"https://www.avito.ru/{trans_text}?cd=1&q={self.keyword}", wait_until="domcontentloaded")
             
             # Собираем ссылки с нескольких страниц
             while len(self.ads) < self.max_num_ads:
                 # Получаем ссылки с текущей страницы
-                page_links = self._get_links()
+                page_links = await self._get_links()
                 
                 # Добавляем новые ссылки, избегая дубликатов
                 new_links_added = 0
@@ -104,38 +136,37 @@ class SearchAvitoAds:
                     if link not in self.ads and len(self.ads) < self.max_num_ads:
                         self.ads.append(link)
                         new_links_added += 1
-                        time.sleep(0.1)  # Небольшая задержка
+                        await asyncio.sleep(0.1)
                 
                 print(f"Добавлено новых ссылок: {new_links_added}")
                 print(f"Всего собрано ссылок: {len(self.ads)} из {self.max_num_ads}")
                 
-                # Проверяем, нужно ли собирать еще
+                # Проверяем, нужно ли собирать еще ссылки
                 if len(self.ads) >= self.max_num_ads:
                     print(f"Достигнуто необходимое количество ссылок: {self.max_num_ads}")
                     break
                 
                 # Пытаемся перейти на следующую страницу
-                if not self._go_to_next_page():
+                if not await self._go_to_next_page():
                     print("Больше нет страниц для парсинга")
                     break
                 
-                time.sleep(2)  # Задержка между страницами
+                await asyncio.sleep(2)  # Асинхронная задержка между страницами
             
             # Финальное сохранение всех данных
             self._save_to_xlsx()
             
             # Выводим результат
-
             print(f"Данные сохранены в файле: {self.data_saving}")
             print(f"Количество строк в файле: {len(self.ads)}")
             
-            browser.close()
+            await browser.close()
 
 
-def main():
-    parser = SearchAvitoAds(sity="tambov", keyword="Авто Мойка", max_num_ads=1200)
-    parser.parse_main()
+async def main():
+    parser = SearchAvitoAds(sity="Тамбов", keyword="Шубы", max_num_ads=120)
+    await parser.parse_main()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
