@@ -4,7 +4,6 @@ import re
 import asyncio
 from playwright.async_api import async_playwright
 from openpyxl import Workbook, load_workbook
-from datetime import datetime
 from googletrans import Translator
 
 class SearchAvitoAds:
@@ -16,7 +15,7 @@ class SearchAvitoAds:
         self.data_saving = "avito_parse_results/avito_ads.xlsx"
         self.start_row = 2
         
-        # Удаляем старый файл, если нужно
+        # Удаляем старый файл
         if os.path.exists(self.data_saving):
             os.remove(self.data_saving)
 
@@ -24,7 +23,6 @@ class SearchAvitoAds:
         link_selector = '[data-marker="item-title"][href]'
         found_links = await self.page.query_selector_all(link_selector)
         
-        # Используем await для каждого элемента
         links = []
         for link in found_links:
             href = await link.get_attribute("href")
@@ -35,15 +33,12 @@ class SearchAvitoAds:
     async def _go_to_next_page(self):
         """Переход на следующую страницу"""
         try:
-            # Ищем кнопку "Вперёд" или пагинацию
+            # Ищем кнопку для перехода на след. страницу
             next_button = await self.page.query_selector('[aria-label="Следующая страница"]')
-            if next_button:
-                # Проверяем видимость с await
-                is_visible = await next_button.is_visible()
-                if is_visible:
-                    await next_button.click()
-                    await asyncio.sleep(2)  # Используем asyncio.sleep вместо time.sleep
-                    return True
+            if next_button and await next_button.is_visible():
+                await next_button.click()
+                await asyncio.sleep(2) 
+                return True
             return False
         except Exception as e:
             print(f"Ошибка при переходе на следующую страницу: {e}")
@@ -54,7 +49,7 @@ class SearchAvitoAds:
         # Создаем папку, если ее нет
         os.makedirs("avito_parse_results", exist_ok=True)
         
-        # Создаем новую рабочую книгу
+        # Создаем новую рабочую область
         self.wb = Workbook()
         self.ws = self.wb.active
         self.ws.title = "Avito Ads"
@@ -91,7 +86,7 @@ class SearchAvitoAds:
         print(f"Данные сохранены в файл: {self.data_saving}")
 
     async def translate_text(self, sity):
-        """Переводим город на английский для удобства"""
+        """Переводим город на английский"""
         # Проверяем, является ли слово английским (только латинские буквы)
         is_english = bool(re.match(r'^[a-zA-Z\s\-]+$', sity))
         
@@ -108,8 +103,6 @@ class SearchAvitoAds:
                 return a.lower()
             except Exception as e:
                 print(f"Ошибка перевода: {e}")
-                # Если перевод не удался, используем транслитерацию
-                return '-'.join(sity.lower().split())
 
     async def parse_main(self):
         # Создаем XLSX файл перед началом парсинга
@@ -123,21 +116,17 @@ class SearchAvitoAds:
             trans_text = await self.translate_text(self.sity)
             # Формируем URL с городом
             await self.page.goto(f"https://www.avito.ru/{trans_text}?cd=1&q={self.keyword}", wait_until="domcontentloaded")
-            
             # Собираем ссылки с нескольких страниц
             while len(self.ads) < self.max_num_ads:
                 # Получаем ссылки с текущей страницы
                 page_links = await self._get_links()
                 
-                # Добавляем новые ссылки, избегая дубликатов
-                new_links_added = 0
+                # Добавляем новые ссылки
                 for link in page_links:
-                    if link not in self.ads and len(self.ads) < self.max_num_ads:
+                    if len(self.ads) < self.max_num_ads:
                         self.ads.append(link)
-                        new_links_added += 1
                         await asyncio.sleep(0.1)
                 
-                print(f"Добавлено новых ссылок: {new_links_added}")
                 print(f"Всего собрано ссылок: {len(self.ads)} из {self.max_num_ads}")
                 
                 # Проверяем, нужно ли собирать еще ссылки
@@ -163,7 +152,7 @@ class SearchAvitoAds:
 
 
 async def main():
-    parser = SearchAvitoAds(sity="Тамбов", keyword="Шубы", max_num_ads=120)
+    parser = SearchAvitoAds(sity="Липецк", keyword="Игровая клавиатура", max_num_ads=1000)
     await parser.parse_main()
 
 
