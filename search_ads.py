@@ -1,5 +1,4 @@
 import os
-import time
 import re
 import asyncio
 from playwright.async_api import async_playwright
@@ -152,7 +151,7 @@ class SearchAvitoAds:
 
 
 async def main():
-    parser = SearchAvitoAds(sity="Липецк", keyword="Игровая клавиатура", max_num_ads=1000)
+    parser = SearchAvitoAds(sity="Липецк", keyword="Игровая клавиатура", max_num_ads=5)
     await parser.parse_main()
 
 
