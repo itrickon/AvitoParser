@@ -4,6 +4,10 @@ from playwright.sync_api import (
     sync_playwright,
     Page,
 )
+from base64 import b64decode
+from io import BytesIO
+from PIL import Image
+from pathlib import Path
 
 class AvitoParse:
     def __init__(self, input_file: str, max_num_firm: int):
@@ -11,6 +15,10 @@ class AvitoParse:
         self.max_num_firm = max_num_firm
         
         self.CLICK_DELAY = 3       # Базовая задержка в секундах перед ожиданием появления номера телефона
+        self.OUT_DIR = Path("avito_phones_playwright")  # Рабочая директория парсера
+        self.OUT_DIR.mkdir(exist_ok=True)    # mkdir - создание папки, если её нет
+        self.IMG_DIR = (self.OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами
+        self.IMG_DIR.mkdir(exist_ok=True)
         
         # ЧЕЛОВЕЧНОСТЬ / АНТИБАН-ПОВЕДЕНИЕ
         self.HUMAN = {
@@ -102,6 +110,28 @@ class AvitoParse:
         except Exception:
             pass
       
+    
+    def save_phone_png_from_data_uri(self, data_uri: str, file_stem: str) -> str | None:
+        '''
+        Сохраняет изображение телефона из data:image URI в PNG файл.
+        Args:
+            data_uri: Строка data:image с изображением
+            file_stem: Имя файла без расширения
+        Return: Путь к сохраненному файлу или None при ошибке
+        '''
+        try:
+            _, b64_data = data_uri.split(",", 1)  # Разделение data:image URI и получение base64 данных
+            raw = b64decode(b64_data)             # Декодирование base64 в бинарные данные
+            image = Image.open(BytesIO(raw)).convert("RGB")  # Создание изображения из бинарных данных
+            file_name = f"{file_stem}.png"
+            out_path = self.IMG_DIR / file_name  # Путь к файлу
+            image.save(out_path)
+            print(f"PNG сохранён: {out_path}")
+            return str(out_path)
+        except Exception as e:
+            print(f"Ошибка при сохранении PNG: {e}")
+            return None
+      
     def get_random_user_agent(self):
         """Скрываем автоматизацию с помощью захода с разных систем"""
         user_agents = [
@@ -126,6 +156,8 @@ class AvitoParse:
                 time.sleep(10)
             except Exception as e:
                 print(f"Произошла ошибка: {e}")
+     
+                             
 def main():
     parser = AvitoParse(input_file="АВТОСАЛОН 05.12.xlsx", max_num_firm=50)
     parser.parse_main()
