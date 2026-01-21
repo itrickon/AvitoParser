@@ -23,14 +23,14 @@ URL_COLUMN = None   # Имя колонки со ссылками; None = иск
 # ПАПКИ И ОСНОВНЫЕ ВЫХОДНЫЕ ФАЙЛЫ
 OUT_DIR = Path("avito_phones_playwright")  # Рабочая директория парсера
 OUT_DIR.mkdir(exist_ok=True)    # mkdir - создание папки, если её нет
-IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URI = False  (То что не провряли давно и не используется))
+IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URL = False  (То что не провряли давно и не используется))
 IMG_DIR.mkdir(exist_ok=True)
 DEBUG_DIR = OUT_DIR / "debug"   # Сюда складываем скриншоты и html проблемных объявлений
 DEBUG_DIR.mkdir(exist_ok=True)
 
 OUT_JSON = (OUT_DIR / "phones" / "phones_map.json")          # Основной результат: {url: data:image... или тег __SKIP_*__}
 PENDING_JSON = (OUT_DIR / "phones" / "pending_review.json")  # Ссылки «на модерации» и с лимитом контактов (в разработке на будущее)
-SAVE_DATA_URI = (True)                                       # True = сохраняем data:image в JSON; False = сохраняем PNG в IMG_DIR
+SAVE_DATA_URL = (True)                                       # True = сохраняем data:image в JSON; False = сохраняем PNG в IMG_DIR
 HEADLESS = False                                             # False = браузер виден (можно логиниться руками)
 
 # ОБЪЁМ И ПАРАЛЛЕЛЬНОСТЬ
@@ -732,7 +732,7 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
                 data_uri = extract_phone_data_uri_on_ad(p)
                 if not data_uri:
                     continue
-                if SAVE_DATA_URI:
+                if SAVE_DATA_URL:
                     value = data_uri
                 else:
                     avito_id = get_avito_id_from_url(url)
@@ -741,7 +741,7 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
                         continue
                     value = out_path   # Использование пути к файлу
                 on_result(url, value)  # Сохранение результата
-                print(f"{url} -> {'[data:image...]' if SAVE_DATA_URI else value}")
+                print(f"{url} -> {'[data:image...]' if SAVE_DATA_URL else value}")
 
             human_sleep(*PAGE_DELAY_BETWEEN_BATCHES)  # Пауза между партиями
     finally:
@@ -787,7 +787,7 @@ def recheck_pending_once(context, on_result):
                 time.sleep(random.uniform(*HUMAN["click_delay_jitter"]))
                 data_uri = extract_phone_data_uri_on_ad(page)
                 if data_uri:
-                    if SAVE_DATA_URI:  # Режим сохранения data:image
+                    if SAVE_DATA_URL:  # Режим сохранения data:image
                         on_result(url, data_uri)
                     else:
                         out = save_phone_png_from_data_uri(data_uri, get_avito_id_from_url(url))  # Сохранение PNG
