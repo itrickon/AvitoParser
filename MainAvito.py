@@ -4,6 +4,7 @@ import re
 import pandas as pd
 import json
 import os
+import signal, atexit
 from playwright.sync_api import (
     sync_playwright,
     Page,
@@ -18,14 +19,19 @@ from pathlib import Path
 
 class AvitoParse:
     def __init__(self, input_file: str, max_num_firm: int):
-        self.input_file = input_file  # Имя Excel/CSV-файла с ссылками на объявления
+        self.input_file = Path(input_file)  # Имя Excel/CSV-файла с ссылками на объявления
         self.max_num_firm = max_num_firm
+        
+        self.phones_map = {}  # Инициализация словаря для результатов
+        self.pending_queue = []  # Инициализация списка для отложенных
         
         self.CONCURRENCY = 3   # Количество одновременно открытых вкладок браузера (2–3 оптимально)
         self.OUT_DIR = Path("avito_phones_playwright")  # Рабочая директория парсера
         self.OUT_DIR.mkdir(exist_ok=True)    # mkdir - создание папки, если её нет
         self.IMG_DIR = (self.OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами
         self.IMG_DIR.mkdir(exist_ok=True)
+        self.DEBUG_DIR = self.OUT_DIR / "debug"   # Сюда складываем скриншоты и html проблемных объявлений
+        self.DEBUG_DIR.mkdir(exist_ok=True)
         
         self.OUT_JSON = (self.OUT_DIR / "phones" / "phones_map.json")          # Основной результат: {url: data:image... или тег __SKIP_*__}
         self.PENDING_JSON = (self.OUT_DIR / "phones" / "pending_review.json")  # Ссылки «на модерации» и с лимитом контактов (в разработке на будущее)
@@ -45,7 +51,7 @@ class AvitoParse:
 
         # БАЗОВЫЕ ТАЙМАУТЫ
         self.CLICK_DELAY = 3       # Базовая задержка в секундах перед ожиданием появления номера телефона
-        self.NAV_TIMEOUT = 90_000  # Таймаут загрузки страницы, мс (90 секунд)
+        self.NAV_TIMEOUT = 70_000  # Таймаут загрузки страницы, мс (70 секунд)
 
         # ЧЕЛОВЕЧНОСТЬ / АНТИБАН-ПОВЕДЕНИЕ
         self.HUMAN = {
@@ -259,20 +265,22 @@ class AvitoParse:
         urls = list(dict.fromkeys(urls))  # Уникальные, порядок сохраняем
         self.atomic_write_json(path, urls)
     
-    def read_urls_from_excel_or_csv(self, path: Path, sheet=None, url_column=None) -> list[str]:
+    def read_urls_from_excel_or_csv(self, sheet=None, url_column=None) -> list[str]:
         '''
         Читает URL объявлений из Excel или CSV файла.
         Args:
-            path: Путь к файлу
             sheet: Имя листа Excel (None для всех листов)
             url_column: Имя колонки с URL (None для поиска во всех колонках)
         Return: Список уникальных URL
         '''
-        url_re = re.compile(r'https?://(?:www\.)?avito\.ru/[^\s"]+')  # Регулярка для поиска URL Avito
+        if not self.input_file.exists():
+            raise FileNotFoundError(f"Файл не найден: {self.input_file}")
+        
+        url_re = re.compile(r'https?://(?:www\.)?avito\.ru/[^\s"]+')
         urls: list[str] = []
 
-        if path.suffix.lower() in {".xlsx", ".xls"}:
-            xls = pd.ExcelFile(path)  # Создание объекта Excel
+        if self.input_file.suffix.lower() in {".xlsx", ".xls"}:
+            xls = pd.ExcelFile(self.input_file)  # Создание объекта Excel
             sheets = [sheet] if sheet is not None else xls.sheet_names  # Определение листов для обработки
             for sh in sheets:
                 df = xls.parse(sh, dtype=str)  # Чтение листа как DataFrame
@@ -284,8 +292,8 @@ class AvitoParse:
                         s = df[col].dropna().astype(str)  # Получение колонки как строки
                         for val in s:
                             urls.extend(url_re.findall(val))  # Поиск URL в значении
-        elif path.suffix.lower() in {".csv", ".txt"}:
-            df = pd.read_csv(path, dtype=str, sep=None, engine="python")
+        elif self.input_file.suffix.lower() in {".csv", ".txt"}:
+            df = pd.read_csv(self.input_file, dtype=str, sep=None, engine="python")
             if url_column and url_column in df.columns:
                 col = df[url_column].dropna().astype(str)
                 urls.extend(col.tolist())
@@ -295,7 +303,7 @@ class AvitoParse:
                     for val in s:
                         urls.extend(url_re.findall(val))
         else:
-            raise ValueError("Поддерживаются .xlsx/.xls/.csv/.txt")
+            raise ValueError(f"Неподдерживаемый формат файла: {self.input_file.suffix}")
 
         cleaned = []
         seen = set()  # Инициализация множества для отслеживания уникальных URL
@@ -308,6 +316,8 @@ class AvitoParse:
             if u not in seen:  # Проверка уникальности URL
                 seen.add(u)
                 cleaned.append(u)
+        
+        print(f"Прочитано {len(cleaned)} URL из файла: {self.input_file.name}")
         return cleaned
     
     def atomic_write_json(self, path: Path, data):
@@ -524,9 +534,12 @@ class AvitoParse:
                         on_result(url, "__SKIP_ON_REVIEW__")
                         pending_queue.append(url)
                         continue
-                    else:
-                        # Клик не удался по неизвестной причине
+                                
+                    # Пытаемся кликнуть на кнопку телефона
+                    if not self.click_show_phone_on_ad(p):
                         print(f"Не удалось кликнуть на {url}")
+                        self.dump_debug(p, url)
+                        continue  # Переходим к следующему URL 
                     
                 # Ждём картинку телефона
                 self.human_sleep(*self.HUMAN["click_delay_jitter"])
@@ -557,14 +570,14 @@ class AvitoParse:
                 except Exception:
                     pass
       
-    def flush_progress(self, phones_map, pending_queue):
+    def flush_progress(self):
             '''
             Внутренняя функция для сохранения прогресса.
             Вызывается при завершении программы.
             '''
             try:
-                self.atomic_write_json(self.OUT_JSON, phones_map)    # Сохранение основного прогресса
-                self.save_pending(self.PENDING_JSON, pending_queue)  # Сохранение отложенных ссылок
+                self.atomic_write_json(self.OUT_JSON, self.phones_map)    # Сохранение основного прогресса
+                self.save_pending(self.PENDING_JSON, self.pending_queue)  # Сохранение отложенных ссылок
             except Exception as e:
                 print(f"Ошибка записи прогресса: {e}")
       
@@ -580,6 +593,21 @@ class AvitoParse:
         self.phones_map[url] = value
         self.atomic_write_json(self.OUT_JSON, self.phones_map) # Сохранение прогресса
       
+    def dump_debug(self, page: Page, url: str):
+        '''
+        Сохраняет скриншот и HTML проблемной страницы для отладки.
+        '''
+        try:
+            ad_id = self.get_avito_id_from_url(url)     # Получение ID объявления из URL
+            png_path = self.DEBUG_DIR / f"{ad_id}.png"  # Пути
+            # html_path = self.DEBUG_DIR / f"{ad_id}.html"
+            page.screenshot(path=str(png_path), full_page=True)  # Создание скриншота всей страницы
+            # html = self.safe_get_content(page)  # Получение HTML содержимого
+            # html_path.write_text(html, encoding="utf-8")
+            print(f"Debug сохранён: {png_path.name}")  # Со скриншотом {png_path.name}, {html_path.name}
+        except Exception as e:
+            print(f"Не удалось сохранить debug: {e}")
+        
     def get_random_user_agent(self):
         """Скрываем автоматизацию с помощью захода с разных систем"""
         user_agents = [
@@ -592,7 +620,7 @@ class AvitoParse:
     def parse_main(self):  
         """Парсинг сайта"""
         
-        urls = self.read_urls_from_excel_or_csv(self.input_file, self.INPUT_SHEET, self.URL_COLUMN)
+        urls = self.read_urls_from_excel_or_csv(self.INPUT_SHEET, self.URL_COLUMN)
         urls = urls[:self.max_num_firm]
 
         self.phones_map: dict[str, str] = self.load_progress(self.OUT_JSON)
@@ -600,12 +628,19 @@ class AvitoParse:
         urls = [u for u in urls if u not in already_done]
 
         # При старте — сначала очередь pending
-        pending_queue = self.load_pending(self.PENDING_JSON)
+        self.pending_queue = self.load_pending(self.PENDING_JSON)
 
-        print(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(pending_queue)}")
-        if not urls and not pending_queue:
+        print(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(self.pending_queue)}")
+        if not urls and not self.pending_queue:
             print(f"Нечего делать. Прогресс в {self.OUT_JSON}: {len(self.phones_map)} записей.")
             return
+        
+        atexit.register(self.flush_progress)  # Регистрация функции при завершении программы
+        for sig in ("SIGINT", "SIGTERM"):
+            try:
+                signal.signal(getattr(signal, sig), lambda *a: (self.flush_progress(), exit(1))) # Установка обработчика сигнала
+            except Exception:
+                pass
         
         with sync_playwright() as playwright:
             try:
@@ -619,26 +654,22 @@ class AvitoParse:
                     timezone_id="Europe/Moscow",
                 )
                 # Ручной логин на первой ссылке (если есть что открывать)
-                seed_url = pending_queue[0] if pending_queue else (urls[0] if urls else None)
+                seed_url = self.pending_queue[0] if self.pending_queue else (urls[0] if urls else None)
                 if seed_url:
                     page = self.context.new_page() # Создание новой страницы
                     try:
                         page.goto(seed_url, wait_until="domcontentloaded", timeout=self.NAV_TIMEOUT)
                     except PWTimeoutError:
                         pass
-                    print("\nТвои действия:")  # Инструкция пользователю
-                    print(" • если есть капча — реши;")
-                    print(" • залогинься в Авито;")
-                    print(" • оставь открытую страницу объявления.")
-                    input("Готов? Нажми Enter в консоли.\n")
+                    print("\nВаши действия:")  # Инструкция пользователю
+                    print(" • Если есть капча — решите;")
+                    print(" • Залогиньтесь в Авито;")
+                    print(" • Оставьте открытую страницу объявления.")
+                    input("Готово? Нажмите Enter в консоли.\n")
                     if self.is_captcha_or_block(page):
                         print("Всё ещё капча/блок — выходим.")
                         browser.close()
-                        try:
-                            self.atomic_write_json(self.OUT_JSON, self.phones_map)    # Сохранение основного прогресса
-                            self.save_pending(self.PENDING_JSON, pending_queue)  # Сохранение отложенных ссылок
-                        except Exception as e:
-                            print(f"Ошибка записи прогресса: {e}")
+                        self.flush_progress()
                         return
                     try:
                         page.close()
@@ -648,33 +679,32 @@ class AvitoParse:
                 print(f"Произошла ошибка: {e}")
 
         # Обработка отложенных ссылок (сняв уже обработанные)
-        pending_queue = [u for u in pending_queue if u not in already_done]
+        self.pending_queue = [u for u in self.pending_queue if u not in already_done]
         try:
             self.process_urls_with_pool(
-                self.context, pending_queue, self.on_result, pending_queue
+                self.context, self.pending_queue, self.on_result, self.pending_queue
             )  # Обработка с добавлением новых отложенных в конец
         except KeyboardInterrupt:
             print("Остановлено пользователем (на pending).")
-            self.flush_progress(self.phones_map, pending_queue)  # Сохранение прогресса
+            self.flush_progress()  # Сохранение прогресса
 
         # Основной список из Excel
         try:
-            self.process_urls_with_pool(self.context, urls, self.on_result, pending_queue)
+            self.process_urls_with_pool(self.context, urls, self.on_result, self.pending_queue)
         except KeyboardInterrupt:
             print("Остановлено пользователем (на основных ссылках).")
-            self.flush_progress(self.phones_map, pending_queue)
+            self.flush_progress()
 
         browser.close()
-        self.flush_progress(self.phones_map, pending_queue)
+        self.flush_progress()
         print(
             f"\nГотово. В {self.OUT_JSON} сейчас {len(self.phones_map)} записей. "
             f"Отложенных осталось: {len(self.load_pending(self.PENDING_JSON))}"
         )
                 
-     
-                             
+                            
 def main():
-    parser = AvitoParse(input_file="АВТОСАЛОН 05.12.xlsx", max_num_firm=50)
+    parser = AvitoParse(input_file="Корп питание avito_593927_23.12.2025_16.05.xlsx", max_num_firm=50)
     parser.parse_main()
 
 

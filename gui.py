@@ -6,8 +6,13 @@ class MainApplication(ttk.Frame):
     def __init__(self, parent, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.parent = parent
-        self.parent.title("AvitoParser")
+        self.parent.title("Avito Parser")
         self.parent.geometry("1000x700")
+        
+        try:
+            self.parent.iconbitmap("static/Avito_logo.ico")
+        except Exception as e:
+            print(f"Cannot load icon: {e}")
         
         self.create_widgets()    
            
