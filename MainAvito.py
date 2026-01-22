@@ -5,9 +5,10 @@ import pandas as pd
 import json
 import os
 import signal, atexit
-from playwright.sync_api import (
-    sync_playwright,
-    Page,
+import asyncio
+from playwright.async_api import (
+    async_playwright,
+    Page as AsyncPage,
     Error as PWError,
     TimeoutError as PWTimeoutError,
 )
@@ -39,19 +40,19 @@ class AvitoParse:
         self.HEADLESS = False                                             # False = браузер виден (можно логиниться руками)
         
         # ПОВЕДЕНИЕ (МЕДЛЕННЕЕ И ЕСТЕСТВЕНЕЕ)
-        self.PAGE_DELAY_BETWEEN_BATCHES = (2.4, 5.2, )    # Пауза между партиями ссылок (раньше была (2.0, 4.0))
-        self.NAV_STAGGER_BETWEEN_TABS = (0.45, 1.35, )    # Пауза перед открытием КАЖДОЙ вкладки (чтобы не стартовали все разом)
-        self.POST_NAV_IDLE = (0.45, 1.05,)                # Небольшая «заминка» после загрузки страницы перед действиями
+        self.PAGE_DELAY_BETWEEN_BATCHES = (1.2, 2.4, )    # Пауза между партиями ссылок (раньше была (2.0, 4.0))
+        self.NAV_STAGGER_BETWEEN_TABS = (0.45, 1.0, )     # Пауза перед открытием КАЖДОЙ вкладки (чтобы не стартовали все разом)
+        self.POST_NAV_IDLE = (0.35, 0.7,)                 # Небольшая «заминка» после загрузки страницы перед действиями
         self.BATCH_CONCURRENCY_JITTER = (True)            # Иногда работаем 2 вкладками вместо 3 для естественности
-        self.CLOSE_STAGGER_BETWEEN_TABS = (0.25, 0.75, )  # Вкладки закрываем с небольшой случайной паузой
+        self.CLOSE_STAGGER_BETWEEN_TABS = (0.25, 0.55, )  # Вкладки закрываем с небольшой случайной паузой
 
         # ВХОДНОЙ ФАЙЛ С ССЫЛКАМИ
         self.INPUT_SHEET = None  # Имя листа в Excel; None = использовать все листы
         self.URL_COLUMN = None   # Имя колонки со ссылками; None = искать ссылки во всех колонках
 
         # БАЗОВЫЕ ТАЙМАУТЫ
-        self.CLICK_DELAY = 3       # Базовая задержка в секундах перед ожиданием появления номера телефона
-        self.NAV_TIMEOUT = 70_000  # Таймаут загрузки страницы, мс (70 секунд)
+        self.CLICK_DELAY = 1.5       # Базовая задержка в секундах перед ожиданием появления номера телефона
+        self.NAV_TIMEOUT = 35_000  # Таймаут загрузки страницы, мс (35 секунд)
 
         # ЧЕЛОВЕЧНОСТЬ / АНТИБАН-ПОВЕДЕНИЕ
         self.HUMAN = {
@@ -71,14 +72,14 @@ class AvitoParse:
         }   
         
             
-    def human_sleep(self, a: float, b: float):
+    async def human_sleep(self, a: float, b: float):
         '''
         Приостанавливает выполнение на случайное количество секунд в диапазоне [a, b].
         Используется для имитации человеческих пауз и предотвращения блокировок!
         '''
-        time.sleep(random.uniform(a, b))
+        await asyncio.sleep(random.uniform(a, b))
 
-    def human_scroll_jitter(self, page: Page, count: int | None = None):
+    async def human_scroll_jitter(self, page: AsyncPage, count: int | None = None):
         '''
         Имитирует человеческий скроллинг страницы.
         Выполняет случайное количество скроллов со случайным шагом и направлением.
@@ -88,18 +89,17 @@ class AvitoParse:
         if count is None:
             count = random.randint(*self.HUMAN["pre_page_warmup_scrolls"]) # Случайное количество скролов
         try:
-            height = page.evaluate("() => document.body.scrollHeight") or 3000
+            height = await page.evaluate("() => document.body.scrollHeight") or 3000
             for _ in range(count):
                 step = random.randint(*self.HUMAN["scroll_step_px"])
                 direction = 1 if random.random() > 0.25 else -1
-                y = max(0, min(height, page.evaluate("() => window.scrollY") + step * direction))
-                page.evaluate("y => window.scrollTo({top: y, behavior: 'smooth'})", y)  # Плавный скролл через JavaScript
-                self.human_sleep(*self.HUMAN["scroll_pause_s"])
+                y = max(0, min(height, await page.evaluate("() => window.scrollY") + step * direction))
+                await page.evaluate("y => window.scrollTo({top: y, behavior: 'smooth'})", y)  # Плавный скролл через JavaScript
+                await self.human_sleep(*self.HUMAN["scroll_pause_s"])
         except Exception:
             pass
 
-
-    def human_wiggle_mouse(self, page: Page, x: float, y: float):
+    async def human_wiggle_mouse(self, page: AsyncPage, x: float, y: float):
         '''
         Имитирует мелкие случайные движения мыши вокруг указанных координат.
         Добавляет реалистичности наведению мыши.
@@ -110,40 +110,39 @@ class AvitoParse:
             dx = random.randint(-amp, amp)  # Смещения x и y
             dy = random.randint(-amp, amp)
             try:
-                page.mouse.move(x + dx, y + dy)
+                await page.mouse.move(x + dx, y + dy)
             except Exception:
                 pass
-            self.human_sleep(*self.HUMAN["between_actions_pause"])  # Пауза между движениями
+            await self.human_sleep(*self.HUMAN["between_actions_pause"])  # Пауза между движениями
 
-
-    def human_hover(self, page: Page, el):
+    async def human_hover(self, page: AsyncPage, el):
         '''
         Имитирует человеческое наведение мыши на элемент.
         Вычисляет центр элемента, добавляет случайное смещение и вибрацию мыши.
         el: Элемент для наведения
         '''
         try:
-            box = el.bounding_box()  # Получение координат и размеров элемента
+            box = await el.bounding_box()  # Получение координат и размеров элемента
             if not box:
                 return
             cx = box["x"] + box["width"] * random.uniform(0.35, 0.65)  # Координаты x, y в пределах элемента
             cy = box["y"] + box["height"] * random.uniform(0.35, 0.65)
-            page.mouse.move(cx, cy)
-            self.human_wiggle_mouse(page, cx, cy)
-            self.human_sleep(*self.HUMAN["hover_pause_s"])
+            await page.mouse.move(cx, cy)
+            await self.human_wiggle_mouse(page, cx, cy)
+            await self.human_sleep(*self.HUMAN["hover_pause_s"])
         except Exception:
             pass
       
-    def safe_get_content(self, page: Page) -> str:
+    async def safe_get_content(self, page: AsyncPage) -> str:
         '''
         Безопасно получает HTML-содержимое страницы с одной попыткой повторения.
         Return: HTML-код страницы или пустая строка при ошибке
         '''
         for _ in range(2):
             try:
-                return page.content().lower()
+                return (await page.content()).lower()
             except PWError:  # Обработка ошибок Playwright
-                time.sleep(1)
+                await asyncio.sleep(1)
         return ""
     
     def get_avito_id_from_url(self, url: str) -> str:
@@ -155,36 +154,36 @@ class AvitoParse:
         m = re.search(r"(\d{7,})", url)
         return m.group(1) if m else str(int(time.time()))
     
-    def is_limit_contacts_modal(self, page: Page) -> bool:
+    async def is_limit_contacts_modal(self, page: AsyncPage) -> bool:
         '''
         Проверяет наличие модального окна о лимите контактов.
         Return: True если обнаружено сообщение о лимите контактов
         '''
-        html = self.safe_get_content(page).lower()
+        html = await self.safe_get_content(page)
         if "закончился лимит" in html and "просмотр контактов" in html:
             return True
         try:
-            loc = page.locator("text=Купить контакты").first
-            if loc.is_visible():
+            loc = page.locator("text=Купить контакт").first
+            if await loc.is_visible():
                 return True
         except Exception:
             pass
         return False
     
-    def is_captcha_or_block(self, page: Page) -> bool:
+    async def is_captcha_or_block(self, page: AsyncPage) -> bool:
         """Быстрая проверка на блокировку"""
         try:
             url = (page.url or "").lower()
         except PWError:
             url = ""
-        html = (self.safe_get_content(page)).lower()
+        html = await self.safe_get_content(page)
         return (
             "captcha" in url or 
             "firewall" in url or
             "доступ с вашего ip-адреса временно ограничен" in html
         )
     
-    def classify_ad_status(self, page: Page) -> str:
+    async def classify_ad_status(self, page: AsyncPage) -> str:
         '''
         Определяет статус объявления по содержимому страницы.
         Return: Строка с статусом: 'ok' | 'no_calls' | 'on_review' | 'unavailable' | 'blocked' | 'limit'
@@ -202,29 +201,45 @@ class AvitoParse:
         self.UNAVAILABLE_MARKERS = [
             "объявление не посмотреть",
             "объявление снято с продажи",
+            "объявление снято с публикации",
             "объявление удалено",
             "объявление закрыто",
+            "объявление истекло",
             "объявление больше не доступно",
+            "пользователь его удалил",
+            "оно заблокировано после проверки"
         ]
         
-        if self.is_captcha_or_block(page):
+        if await self.is_captcha_or_block(page):
             return "blocked"
 
-        html = self.safe_get_content(page)
+        html = await self.safe_get_content(page)
+
+        # Если не удалось получить контент, пробуем еще раз с задержкой
+        if not html or len(html) < 100:  # Если HTML слишком короткий или пустой
+            await self.human_sleep(0.4, 0.8)
+            html = await self.safe_get_content(page)
 
         # Проверка лимита контактов
-        if self.is_limit_contacts_modal(page):
+        if await self.is_limit_contacts_modal(page):
             return "limit"
+        
+        try:
+            if await page.locator("text=Сайт временно недоступен").first.is_visible():
+                page.reload()
+        except Exception:
+            pass
+        
         
         # Проверка модерации, доступности, режима "без звонков"
         MARKERS = [self.NO_CALLS_MARKERS, self.MODERATION_MARKERS, self.UNAVAILABLE_MARKERS]
-        text_makers = ["on_review", "unavailable", "no_calls"]
-        for i in range(3):
+        text_makers = ["no_calls", "on_review", "unavailable"]
+        for i in range(len(MARKERS)):
             if any(m in html for m in MARKERS[i]):
                 return text_makers[i]
 
         try:
-            if page.locator("text=Без звонков").first.is_visible():
+            if await page.locator("text=Без звонков").first.is_visible():
                 return "no_calls"
         except Exception:
             pass
@@ -243,7 +258,6 @@ class AvitoParse:
                 print(f"Не удалось прочитать существующий прогресс: {e}")
         return {}
 
-
     def load_pending(self, path: Path) -> list[str]:
         '''
         Загружает список отложенных ссылок из JSON файла.
@@ -256,7 +270,6 @@ class AvitoParse:
             except Exception:
                 pass
         return []
-
 
     def save_pending(self, path: Path, urls: list[str]):
         '''
@@ -341,35 +354,35 @@ class AvitoParse:
         except Exception as e:
             print(f"Критическая ошибка записи прогресса: {e}")
     
-    def try_click(self, page: Page, el) -> bool:
+    async def try_click(self, page: AsyncPage, el) -> bool:
         '''
         Пытается кликнуть на элемент различными способами.
         Return: True если клик выполнен успешно
         '''
-        self.human_hover(page, el)
-        self.human_sleep(*self.HUMAN["pre_click_pause_s"])
+        await self.human_hover(page, el)
+        await self.human_sleep(*self.HUMAN["pre_click_pause_s"])
         try:
-            el.click()
-            self.human_sleep(*self.HUMAN["post_click_pause_s"])
+            await el.click()
+            await self.human_sleep(*self.HUMAN["post_click_pause_s"])
             return True
         except Exception:
             try:  # Попытка альтернативного клика через JavaScript
-                box = el.bounding_box() or {}
+                box = await el.bounding_box() or {}
                 if box:
-                    page.mouse.move(box.get("x", 0) + 6, box.get("y", 0) + 6)  # Перемещение мыши к элементу со смещением
-                    self.human_sleep(*self.HUMAN["pre_click_pause_s"])
-                page.evaluate("(e)=>e.click()", el)  # Клик через JS
-                self.human_sleep(*self.HUMAN["post_click_pause_s"])
+                    await page.mouse.move(box.get("x", 0) + 6, box.get("y", 0) + 6)  # Перемещение мыши к элементу со смещением
+                    await self.human_sleep(*self.HUMAN["pre_click_pause_s"])
+                await page.evaluate("(e)=>e.click()", el)  # Клик через JS
+                await self.human_sleep(*self.HUMAN["post_click_pause_s"])
                 return True
             except Exception:
                 return False
     
-    def click_show_phone_on_ad(self, page: Page) -> bool:
+    async def click_show_phone_on_ad(self, page: AsyncPage) -> bool:
         '''
         Пытается найти и кликнуть на кнопку "Показать телефон" в объявлении.
         Return: True если кнопка найдена и клик выполнен
         '''
-        self.human_scroll_jitter(page)
+        await self.human_scroll_jitter(page)
 
         for anchor in [
             "[data-marker='seller-info']",
@@ -378,10 +391,10 @@ class AvitoParse:
             "section:has(button:has-text('Показать'))",
             ]:
             try:
-                anchor_element = page.query_selector(anchor)  # Поиск якорного элемента
+                anchor_element = await page.query_selector(anchor)  # Поиск якорного элемента
                 if anchor_element:
-                    anchor_element.scroll_into_view_if_needed()  # Прокрутка к элементу, если элемент найден
-                    self.human_sleep(*self.HUMAN["scroll_pause_s"])
+                    await anchor_element.scroll_into_view_if_needed()  # Прокрутка к элементу, если элемент найден
+                    await self.human_sleep(*self.HUMAN["scroll_pause_s"])
                     break
             except Exception:
                 pass
@@ -396,17 +409,17 @@ class AvitoParse:
 
         for sel in selector_groups:
             try:
-                el = page.query_selector(sel)
-                if el and el.is_visible() and el.is_enabled():
-                    if self.try_click(page, el):
-                        print("Нажали 'Показать телефон'.")
+                el = await page.query_selector(sel)
+                if el and await el.is_visible() and await el.is_enabled():
+                    if await self.try_click(page, el):
+                        print("Нажали 'Показать телефон'")
                         # Ждем номер телефона
                         try:
-                            page.wait_for_selector("img[data-marker='phone-image']", timeout=4000)
+                            await page.wait_for_selector("img[data-marker='phone-popup/phone-image']", timeout=3000)
                         except Exception:
                             pass
                         # Проверяем, появилась ли модалка авторизации
-                        if page.query_selector("[data-marker='login-form']"):
+                        if await page.query_selector("[data-marker='login-form']"):
                             print("Обнаружена модалка авторизации после клика")
                             return False
                         return True
@@ -416,23 +429,23 @@ class AvitoParse:
         print("Кнопка 'Показать телефон' не найдена.")
         return False
     
-    def extract_phone_data_uri_on_ad(self, page: Page) -> str | None:
+    async def extract_phone_data_uri_on_ad(self, page: AsyncPage) -> str | None:
         '''
         Извлекает data:image URI с изображением телефона со страницы. 
         Return: data:image URI или None если изображение не найдено
         '''
         try:  # Попытка поиска изображения телефона
-            img = page.query_selector("img[data-marker='phone-image']")  # Поиск изображения по data-maker
+            img = await page.query_selector("img[data-marker='phone-popup/phone-image']")  # Поиск изображения по data-maker
         except PWError:
             img = None
 
-        if not img or not img.is_visible():
+        if not img or not await img.is_visible():
             print("Картинка с номером не найдена.")
             return None
 
         # Получаем src атрибут
         try:
-            src = img.get_attribute("src") or ""
+            src = await img.get_attribute("src") or ""
         except Exception:
             img = None
         if not src.startswith("data:image"):
@@ -461,20 +474,19 @@ class AvitoParse:
             print(f"Ошибка при сохранении PNG: {e}")
             return None
     
-    def process_urls_with_pool(self, context, urls: list[str], on_result, pending_queue: list[str]):
+    async def process_urls_with_pool(self, context, urls: list[str], pending_queue: list[str]):
         '''
         Обрабатывает список URL с использованием пула страниц.
         Args:
             context: Контекст браузера Playwright
             urls: Список URL для обработки
-            on_result: Функция обратного вызова для сохранения результатов
             pending_queue: Список для добавления отложенных URL
         '''
         if not urls:
             return
 
         # Пул создаём максимального размера; часть вкладок можем не использовать
-        pages = [context.new_page() for _ in range(self.CONCURRENCY)]
+        pages = [await context.new_page() for _ in range(self.CONCURRENCY)]
         try:
             it = iter(urls)  # Итератор по URL
             while True:
@@ -495,22 +507,22 @@ class AvitoParse:
                     batch.append((url, p))
 
                     # Не открываем все вкладки синхронно — ставим паузу перед каждым goto
-                    self.human_sleep(*self.NAV_STAGGER_BETWEEN_TABS)
+                    await self.human_sleep(*self.NAV_STAGGER_BETWEEN_TABS)
                     try:
-                        p.goto(url, wait_until="domcontentloaded", timeout=self.NAV_TIMEOUT)
+                        await p.goto(url, wait_until="domcontentloaded", timeout=self.NAV_TIMEOUT)
                     except PWTimeoutError:
                         print(f"Таймаут: {url}")
                         continue
 
-                    # Лёгкая «заминка» после навигации + пара скроллов
-                    self.human_sleep(*self.POST_NAV_IDLE)
-                    self.human_scroll_jitter(p, count=random.randint(1, 2))
+                    # Лёгкая «заминка» после навигации + пара скроллов(скрыто)
+                    await self.human_sleep(*self.POST_NAV_IDLE)
+                    # await self.human_scroll_jitter(p, count=random.randint(1, 2))
                   
                 # Статус + модалки + попытка клика
                 for url, p in batch:
-                    self.human_sleep(*self.HUMAN["between_actions_pause"])
+                    # await self.human_sleep(*self.HUMAN["between_actions_pause"])
                     
-                    st = self.classify_ad_status(p)
+                    st = await self.classify_ad_status(p)
                     
                     # Обработка всех статусных кейсов
                     if st == "blocked":
@@ -518,36 +530,36 @@ class AvitoParse:
                         continue
                     if st == "limit":
                         print(f"Лимит контактов: {url}")
-                        on_result(url, "__SKIP_LIMIT__")
+                        await self.on_result(url, "__SKIP_LIMIT__")
                         pending_queue.append(url)
                         continue
                     if st == "unavailable":
                         print(f"Недоступно/закрыто: {url}")
-                        on_result(url, "__SKIP_UNAVAILABLE__")
+                        await self.on_result(url, "__SKIP_UNAVAILABLE__")
                         continue
                     if st == "no_calls":
                         print(f"Без звонков: {url}")
-                        on_result(url, "__SKIP_NO_CALLS__")
+                        await self.on_result(url, "__SKIP_NO_CALLS__")
                         continue
                     if st == "on_review":
                         print(f"На проверке: {url}")
-                        on_result(url, "__SKIP_ON_REVIEW__")
+                        await self.on_result(url, "__SKIP_ON_REVIEW__")
                         pending_queue.append(url)
                         continue
                                 
                     # Пытаемся кликнуть на кнопку телефона
-                    if not self.click_show_phone_on_ad(p):
+                    if not await self.click_show_phone_on_ad(p):
                         print(f"Не удалось кликнуть на {url}")
-                        self.dump_debug(p, url)
+                        await self.dump_debug(p, url)
                         continue  # Переходим к следующему URL 
                     
                 # Ждём картинку телефона
-                self.human_sleep(*self.HUMAN["click_delay_jitter"])
+                await self.human_sleep(*self.HUMAN["click_delay_jitter"])
                 for url, p in batch:
-                    self.human_sleep(*self.HUMAN["between_actions_pause"])
-                    if self.is_captcha_or_block(p):  # Проверка модалок и блокировок
+                    await self.human_sleep(*self.HUMAN["between_actions_pause"])
+                    if await self.is_captcha_or_block(p):  # Проверка модалок и блокировок
                         continue  # Пропуск объявления 
-                    data_uri = self.extract_phone_data_uri_on_ad(p)
+                    data_uri = await self.extract_phone_data_uri_on_ad(p)
                     if not data_uri:
                         continue
                     if self.SAVE_DATA_URL:
@@ -558,15 +570,15 @@ class AvitoParse:
                         if not out_path:  # Проверка успешности сохранения
                             continue
                         value = out_path   # Использование пути к файлу
-                    on_result(url, value)  # Сохранение результата
+                    await self.on_result(url, value)  # Сохранение результата
                     print(f"{url} -> {'[data:image...]' if self.SAVE_DATA_URL else value}")
 
-                self.human_sleep(*self.PAGE_DELAY_BETWEEN_BATCHES)  # Пауза между партиями
+                await self.human_sleep(*self.PAGE_DELAY_BETWEEN_BATCHES)  # Пауза между партиями
         finally:
             for p in pages:
                 try:
-                    self.human_sleep(*self.CLOSE_STAGGER_BETWEEN_TABS)
-                    p.close()  # Закрытие страницы
+                    await self.human_sleep(*self.CLOSE_STAGGER_BETWEEN_TABS)
+                    await p.close()  # Закрытие страницы
                 except Exception:
                     pass
       
@@ -581,7 +593,7 @@ class AvitoParse:
             except Exception as e:
                 print(f"Ошибка записи прогресса: {e}")
       
-    def on_result(self, url: str, value: str | None):
+    async def on_result(self, url: str, value: str | None):
         '''
         Функция обратного вызова для сохранения результатов.
         Args:
@@ -593,7 +605,7 @@ class AvitoParse:
         self.phones_map[url] = value
         self.atomic_write_json(self.OUT_JSON, self.phones_map) # Сохранение прогресса
       
-    def dump_debug(self, page: Page, url: str):
+    async def dump_debug(self, page: AsyncPage, url: str):
         '''
         Сохраняет скриншот и HTML проблемной страницы для отладки.
         '''
@@ -601,23 +613,27 @@ class AvitoParse:
             ad_id = self.get_avito_id_from_url(url)     # Получение ID объявления из URL
             png_path = self.DEBUG_DIR / f"{ad_id}.png"  # Пути
             # html_path = self.DEBUG_DIR / f"{ad_id}.html"
-            page.screenshot(path=str(png_path), full_page=True)  # Создание скриншота всей страницы
-            # html = self.safe_get_content(page)  # Получение HTML содержимого
+            await page.screenshot(path=str(png_path), full_page=True)  # Создание скриншота всей страницы
+            # html = await self.safe_get_content(page)  # Получение HTML содержимого
             # html_path.write_text(html, encoding="utf-8")
             print(f"Debug сохранён: {png_path.name}")  # Со скриншотом {png_path.name}, {html_path.name}
         except Exception as e:
             print(f"Не удалось сохранить debug: {e}")
-        
+      
     def get_random_user_agent(self):
         """Скрываем автоматизацию с помощью захода с разных систем"""
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+        user_agents =         user_agents = [
+            # Windows Chrome - разные версии
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.85 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 11_7_10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 10; SM-A505FN) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.178 Mobile Safari/537.36",
         ]
         return random.choice(user_agents)
       
-    def parse_main(self):  
+    async def parse_main(self):  
         """Парсинг сайта"""
         
         urls = self.read_urls_from_excel_or_csv(self.INPUT_SHEET, self.URL_COLUMN)
@@ -642,71 +658,102 @@ class AvitoParse:
             except Exception:
                 pass
         
-        with sync_playwright() as playwright:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=False,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--disable-web-security',
+                    '--disable-site-isolation-trials',
+                ]
+            )  # headless=True - без графического итерфейса
             try:
-                browser = playwright.chromium.launch(headless=False)  # headless=True - без графического итерфейса
                 vp_w = random.randint(1200, 1400)
                 vp_h = random.randint(760, 900)
-                self.context = browser.new_context(
+                context = await browser.new_context(
                     viewport={"width": vp_w, "height": vp_h},
                     user_agent=self.get_random_user_agent(),
                     locale="ru-RU",
                     timezone_id="Europe/Moscow",
                 )
+                
                 # Ручной логин на первой ссылке (если есть что открывать)
                 seed_url = self.pending_queue[0] if self.pending_queue else (urls[0] if urls else None)
                 if seed_url:
-                    page = self.context.new_page() # Создание новой страницы
+                    page = await context.new_page() # Создание новой страницы
+                    
+                    await asyncio.sleep(random.uniform(0.4, 0.8))
                     try:
-                        page.goto(seed_url, wait_until="domcontentloaded", timeout=self.NAV_TIMEOUT)
+                        await asyncio.sleep(random.uniform(0.5, 0.8))
+                        
+                        # Потом на объявление
+                        await page.goto(seed_url, 
+                                    wait_until="domcontentloaded", 
+                                    timeout=self.NAV_TIMEOUT)
                     except PWTimeoutError:
-                        pass
-                    print("\nВаши действия:")  # Инструкция пользователю
-                    print(" • Если есть капча — решите;")
-                    print(" • Залогиньтесь в Авито;")
-                    print(" • Оставьте открытую страницу объявления.")
-                    input("Готово? Нажмите Enter в консоли.\n")
-                    if self.is_captcha_or_block(page):
+                        try:
+                            await page.goto(seed_url, 
+                                        wait_until="domcontentloaded", 
+                                        timeout=self.NAV_TIMEOUT)
+                        except PWTimeoutError:
+                            print(f"Таймаут при загрузке {seed_url}")
+                    
+                    await self.human_sleep(0.4, 0.7)
+                    if await self.is_captcha_or_block(page):
+                        print("Обнаружена капча/блокировка на первой странице.")
+                        print("Реши капчу вручную или проверь VPN/прокси.")
+                        input("После решения нажми Enter...")
+                    
+                    print("\nТвои действия:")  # Инструкция пользователю
+                    print(" • если есть капча — реши;")
+                    print(" • залогинься в Авито;")
+                    print(" • оставь открытую страницу объявления.")
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, input, "Готов? Нажми Enter в консоли: ")
+                    
+                    if await self.is_captcha_or_block(page):
                         print("Всё ещё капча/блок — выходим.")
-                        browser.close()
+                        await browser.close()
                         self.flush_progress()
                         return
+                        
                     try:
-                        page.close()
+                        await page.close()
                     except Exception:
                         pass
-            except Exception as e:
-                print(f"Произошла ошибка: {e}")
 
-        # Обработка отложенных ссылок (сняв уже обработанные)
-        self.pending_queue = [u for u in self.pending_queue if u not in already_done]
-        try:
-            self.process_urls_with_pool(
-                self.context, self.pending_queue, self.on_result, self.pending_queue
-            )  # Обработка с добавлением новых отложенных в конец
-        except KeyboardInterrupt:
-            print("Остановлено пользователем (на pending).")
-            self.flush_progress()  # Сохранение прогресса
+                # Обработка отложенных ссылок (сняв уже обработанные)
+                self.pending_queue = [u for u in self.pending_queue if u not in already_done]
+                try:
+                    await self.process_urls_with_pool(
+                        context, self.pending_queue, self.pending_queue
+                    )  # Обработка с добавлением новых отложенных в конец
+                except KeyboardInterrupt:
+                    print("Остановлено пользователем (на pending).")
+                    self.flush_progress()  # Сохранение прогресса
 
-        # Основной список из Excel
-        try:
-            self.process_urls_with_pool(self.context, urls, self.on_result, self.pending_queue)
-        except KeyboardInterrupt:
-            print("Остановлено пользователем (на основных ссылках).")
-            self.flush_progress()
-
-        browser.close()
+                # Основной список из Excel
+                try:
+                    await self.process_urls_with_pool(context, urls, self.pending_queue)
+                except KeyboardInterrupt:
+                    print("Остановлено пользователем (на основных ссылках).")
+                    self.flush_progress()
+                    
+            finally:
+                await browser.close()
+                
         self.flush_progress()
         print(
             f"\nГотово. В {self.OUT_JSON} сейчас {len(self.phones_map)} записей. "
             f"Отложенных осталось: {len(self.load_pending(self.PENDING_JSON))}"
         )
-                
-                            
-def main():
-    parser = AvitoParse(input_file="Корп питание avito_593927_23.12.2025_16.05.xlsx", max_num_firm=50)
-    parser.parse_main()
 
+                                        
+async def main():
+    parser = AvitoParse(input_file="Корп питание avito_593927_23.12.2025_16.05.xlsx", max_num_firm=500)
+    await parser.parse_main()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
+
