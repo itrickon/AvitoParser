@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 from decode_photos import decode_img_phones
 
-INPUT_JSON = Path("avito_phones_playwright/phones_map.json")
+INPUT_JSON = Path("avito_phones_playwright/phones/phones_map.json")
 OUTPUT_XLSX = Path("phones.xlsx")
 
 def load_data(path: Path) -> dict:

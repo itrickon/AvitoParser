@@ -19,6 +19,7 @@ phones_output.xlsx
 avito_phones_playwright/pending_review.json
 new_ads/*.xlsx
 avito_parse_results/*.xlsx
+~$phones_output.xlsx
 
 # Distribution / packaging
 .Python
