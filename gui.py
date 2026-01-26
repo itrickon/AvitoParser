@@ -1,6 +1,8 @@
 import os
 import re
+import time
 import sv_ttk
+import asyncio
 import tkinter as tk
 import threading
 import pandas as pd
@@ -37,6 +39,7 @@ class AvitoParse(ttk.Frame):
         """Создание всех виджетов интерфейса"""
         self.top_level_menu()
         self.create_parser_controls()
+        self.create_status_bar()
         
     def top_level_menu(self):
         """Верхнее меню"""
@@ -174,7 +177,7 @@ class AvitoParse(ttk.Frame):
         self.btn_continue_parse.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(button_frame, text="Остановить парсинг", 
-                  command='#', width=20).pack(side=tk.LEFT, padx=5)
+                  command=self.stop_parsing, width=20).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Очистить лог", 
                   command='#', width=20).pack(side=tk.LEFT, padx=5)
         
@@ -360,7 +363,7 @@ class AvitoParse(ttk.Frame):
         """if self.is_parsing:
             messagebox.showwarning("Предупреждение", "Парсинг уже выполняется!")
             return"""
-        # self.is_parsing = True
+        self.is_parsing = True
         if self.parser_mode_key.get() == "keyword":
             self.run_keyword_parsing()
         if self.parser_mode_key.get() == "url":
@@ -440,46 +443,100 @@ class AvitoParse(ttk.Frame):
         except Exception as e:
             messagebox.showerror("Ошибка", f"Неверный формат URL: {str(e)}")
     
-    def load_telemetry_data(self, file_path):
+    def stop_parsing(self):
+        """Остановка парсинга"""
+        if not self.is_parsing:
+            messagebox.showinfo("Информация", "Парсинг не выполняется")
+            return
+        
+        # Закрытие страницы в отдельном потоке
+        time.sleep(1)
+        if hasattr(self, 'parser_instance'):
+            threading.Thread(
+                target=lambda: asyncio.run(self.parser_instance.page.close()) 
+                if hasattr(self.parser_instance, 'page') else None,
+                daemon=True
+            ).start()
+        
+        self.is_parsing = False
+        self.status_var.set("Парсинг остановлен")
+        # self.log_message("Парсинг остановлен пользователем")
+    
+    def create_status_bar(self):
+        """Создание строки состояния"""
+        self.status_var = tk.StringVar()
+        self.status_var.set("Готов к работе")
+        self.status_bar = ttk.Label(self, textvariable=self.status_var, 
+                                   relief=tk.SUNKEN, padding=(10, 5))
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+    def load_data(self, file_path):
         """Загружаю и обрабатываю файл .xlsx или .json"""
         try:
             # Определяем расширение файла
             file_ext = os.path.splitext(file_path)[1].lower()
             
             if file_ext in ['.xlsx', '.xls']:
+                # Загрузка Excel файла
                 df = pd.read_excel(file_path, na_values=["--.--", "nan", "NaN", "", "---"])
+                
+                return df
+                
             elif file_ext == '.json':
-                df = pd.read_json(file_path)
+                import json
+                
+                # Читаем JSON файл
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # Проверяем структуру данных
+                if isinstance(data, dict):
+                    # Если это словарь с URL как ключи и base64 как значения
+                    # Преобразуем в DataFrame
+                    back_skip = ["__SKIP_UNAVAILABLE__", "__SKIP_LIMIT__", "__SKIP_NO_CALLS__", "__SKIP_ON_REVIEW__"]
+                    records = []
+                    for url, img_data in data.items():
+                        if img_data not in back_skip:
+                            records.append({
+                                'URL': url,
+                                'Image_Data': img_data
+                            })
+                    
+                    df = pd.DataFrame(records)
+                    print(f"Загружено {len(df)} изображений из JSON")
+                    
+                elif isinstance(data, list):
+                    # Если это список объектов
+                    df = pd.DataFrame(data)
+                else:
+                    raise ValueError(f"Неожиданный формат JSON данных")
+                
+                return df
+                
             else:
                 raise ValueError(f"Неподдерживаемый формат файла: {file_ext}")
-            
-            # Обработка данных (общая для всех форматов)
-            if "Timestamp" in df.columns:
-                df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-            
-            return df
 
         except Exception as e:
             print(f"Ошибка загрузки данных: {e}")
             raise
             
     def btn_open(self):
-        """Обработчик кнопки 'Открыть'"""
+        """Обработчик кнопки 'Excel файл после поиска обновлений'"""
         file_path = filedialog.askopenfilename(
             title="Выберите файл телеметрии",
             filetypes=[("Excel", "*.xlsx"), ("All files", "*.*")],
         )
         if file_path:
-            # self.status_var.set(f"Загрузка файла: {file_path}...")
+            self.status_var.set(f"Загрузка файла: {file_path}...")
             self.update_idletasks()  # Обновляю статус-бар
             try:
-                self.df = self.load_telemetry_data(file_path)
-                # self.status_var.set(f"Успех! Загружено: {len(self.df)} записей")
+                self.df = self.load_data(file_path)
+                self.status_var.set(f"Успех! Загружено: {len(self.df)} записей")
                 # self.enable_export_menus()
                 # self.create_tabs()
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось загрузить файл:\n{str(e)}")
-                # self.status_var.set("Ошибка загрузки файла")
+                self.status_var.set("Ошибка загрузки файла")
                 
     def btn_open_decocde(self):
         """Обработчик кнопки 'Открыть'"""
@@ -488,16 +545,16 @@ class AvitoParse(ttk.Frame):
             filetypes=[("JSON", "*.json"), ("All files", "*.*")],
         )
         if file_path:
-            # self.status_var.set(f"Загрузка файла: {file_path}...")
+            self.status_var.set(f"Загрузка файла: {file_path}...")
             self.update_idletasks()  # Обновляю статус-бар
             try:
-                self.df = self.load_telemetry_data(file_path)
-                # self.status_var.set(f"Успех! Загружено: {len(self.df)} записей")
+                self.df = self.load_data(file_path)
+                self.status_var.set(f"Успех! Загружено: {len(self.df)} записей")
                 # self.enable_export_menus()
                 # self.create_tabs()
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось загрузить файл:\n{str(e)}")
-                # self.status_var.set("Ошибка загрузки файла")
+                self.status_var.set("Ошибка загрузки файла")
  
     def btn_about(self):
         """Обработчик кнопки 'О программе'"""
@@ -519,7 +576,7 @@ class AvitoParse(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.0.3\n\n",
+        "    Версия 0.0.4\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",
