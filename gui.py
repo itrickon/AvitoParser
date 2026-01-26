@@ -1,12 +1,16 @@
 import os
+import re
 import sv_ttk
 import tkinter as tk
-import json
+import threading
 import pandas as pd
 from tkinter import *
 from tkinter import ttk, messagebox, filedialog
+from search_ads import SearchAvitoAds
+from async_runner import AsyncParserRunner
+
     
-class MainApplication(ttk.Frame):
+class AvitoParse(ttk.Frame):
     def __init__(self, parent, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.parent = parent
@@ -163,7 +167,7 @@ class MainApplication(ttk.Frame):
         button_frame.config(height=40)
         
         ttk.Button(button_frame, text="Начать парсиг", 
-                  command='#', width=20).pack(side=tk.LEFT, padx=5)
+                  command=self.run_parsing, width=20).pack(side=tk.LEFT, padx=5)
         
         self.btn_continue_parse = ttk.Button(button_frame, text="Продолжить парсинг", 
                                      command='#', width=20)
@@ -335,9 +339,109 @@ class MainApplication(ttk.Frame):
             self.generate_url_btn.config(state=tk.DISABLED)
             self.btn_continue_parse.config(state=tk.DISABLED)
             self.firm_count_spinbox.config(state=tk.DISABLED)
-     
+    
+    def run_async_parsing(self, parser_instance):
+        """Запуск асинхронного парсинга в отдельном потоке"""
+        try:
+            # Создаем и запускаем runner
+            runner = AsyncParserRunner(
+                parser_instance, 
+                update_callback=self.update_gui_from_thread,
+                # completion_callback=self.on_parsing_complete
+            )
+            self.parser_thread = runner.start()
+            
+        except Exception as e:
+            self.update_gui_from_thread(f"Ошибка запуска: {str(e)}")
+            self.is_parsing = False
+    
+    def run_parsing(self):
+        """Запуск парсинга в зависимости от выбранного режима"""
+        """if self.is_parsing:
+            messagebox.showwarning("Предупреждение", "Парсинг уже выполняется!")
+            return"""
+        # self.is_parsing = True
+        if self.parser_mode_key.get() == "keyword":
+            self.run_keyword_parsing()
+        if self.parser_mode_key.get() == "url":
+            self.run_url_parsing()
+    
+    def run_keyword_parsing(self):
+        """Запуск парсинга по ключу"""
+        keyword = self.keyword_var_keyword.get()
+        city = self.city_var_keyword.get()
+        firm_count = self.firm_count_var.get()
+        
+        if not keyword or not city:
+            messagebox.showwarning("Предупреждение", "Заполните все поля!")
+            return
+        
+        # ПРАВИЛЬНЫЙ ПОРЯДОК: город, ключевое слово, количество
+        self.is_parsing = True
+        self.parser_instance = SearchAvitoAds(city, keyword, firm_count)
+        
+        runner = AsyncParserRunner(
+            self.parser_instance,
+            update_callback=self.update_gui_from_thread,
+            # completion_callback=self.on_parsing_complete
+        )
+        runner.start()
+    
+    def run_url_parsing(self):
+        """Запуск парсинга по URL - извлекаем город и ключ из URL"""
+        url = self.url_var.get()
+        firm_count = self.firm_count_var.get()
+        
+        if not url:
+            messagebox.showwarning("Предупреждение", "Введите URL для парсинга!")
+            return
+            
+        # Проверяем, что это URL Avito
+        if not url.startswith(('https://www.avito.ru/', 'http://www.avito.ru/')):
+            messagebox.showwarning("Предупреждение", "Введите корректный URL Avito!")
+            return
+        
+        try:
+            # Извлекаем город и ключевое слово из URL
+            pattern = r'https?://www\.avito\.ru/([^/?]+)(?:\?q=([^&]+))?'
+            match = re.search(pattern, url)
+            
+            if match:
+                city_code = match.group(1)
+                keyword = match.group(2)
+                
+                # Декодируем URL-кодирование если есть
+                from urllib.parse import unquote
+                keyword = unquote(keyword)
+                
+                # Проверяем, что есть ключевое слово
+                if not keyword:
+                    messagebox.showwarning("Ошибка", 
+                        "В URL отсутствует поисковый запрос (параметр q=)\n"
+                        "Пример: https://www.avito.ru/moskva?q=Доставка")
+                    return
+                
+                self.is_parsing = True
+                self.parser_instance = SearchAvitoAds(city_code, keyword, firm_count)
+                print('Запуск')
+                runner = AsyncParserRunner(
+                    self.parser_instance,
+                    update_callback=self.update_gui_from_thread,
+                    # completion_callback=self.on_parsing_complete
+                )
+                runner.start()
+                
+            else:
+                messagebox.showwarning("Ошибка", 
+                    "Не удалось извлечь данные из URL. Проверьте формат:\n"
+                    "Пример: https://www.avito.ru/lipetsk?q=Шубы\n"
+                    "Или: https://www.avito.ru/moskva?q=Доставка")
+                    
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Неверный формат URL: {str(e)}")
+    
     def load_telemetry_data(self, file_path):
-        """Загружаю и обрабатываю файл с телеметрией UAV"""
+        """Загружаю и обрабатываю файл .xlsx или .json"""
         try:
             # Определяем расширение файла
             file_ext = os.path.splitext(file_path)[1].lower()
@@ -415,7 +519,7 @@ class MainApplication(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.0.2\n\n",
+        "    Версия 0.0.3\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",
@@ -448,6 +552,14 @@ class MainApplication(ttk.Frame):
         y = (top.winfo_screenheight() // 2) - (height // 2)
         top.geometry(f'{width}x{height}+{x}+{y}')
  
+    def update_gui_from_thread(self, message):
+        """Обновление GUI из потока"""
+        """def update():
+            self.log_message(message)
+            self.status_var.set(message[:50] + "..." if len(message) > 50 else message)"""
+            
+        # self.after(0, update)
+ 
     def btn_exit(self):
         """Выход из приложения"""
         """if self.is_parsing:
@@ -463,7 +575,7 @@ class MainApplication(ttk.Frame):
 def main():
     """Точка входа в приложение"""
     root = tk.Tk()
-    app = MainApplication(root)
+    app = AvitoParse(root)
     root.mainloop()
 
 

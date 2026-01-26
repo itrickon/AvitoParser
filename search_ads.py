@@ -103,7 +103,7 @@ class SearchAvitoAds:
             except Exception as e:
                 print(f"Ошибка перевода: {e}")
 
-    async def parse_main(self):
+    async def parse_main(self, update_callback=None):
         # Создаем XLSX файл перед началом парсинга
         self._create_xlsx()
         
@@ -144,7 +144,6 @@ class SearchAvitoAds:
             self._save_to_xlsx()
             
             # Выводим результат
-            print(f"Данные сохранены в файле: {self.data_saving}")
             print(f"Количество строк в файле: {len(self.ads)}")
             
             await browser.close()
