@@ -5,8 +5,10 @@ import sv_ttk
 import asyncio
 import tkinter as tk
 import threading
+import datetime
 import pandas as pd
 from tkinter import *
+from googletrans import Translator
 from tkinter import ttk, messagebox, filedialog
 from search_ads import SearchAvitoAds
 from async_runner import AsyncParserRunner
@@ -31,6 +33,7 @@ class AvitoParse(ttk.Frame):
         self.toggle_parser_mode()  
         
         self.check_button_enabled = IntVar()
+        self.is_parsing = False
  
     def interface_style(self):
         sv_ttk.set_theme("light")
@@ -48,14 +51,10 @@ class AvitoParse(ttk.Frame):
 
         parse_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Парсинг", menu=parse_menu)
-        parse_menu.add_command(label="Открыть...", accelerator="Ctrl+O", command=self.btn_open)
+        parse_menu.add_command(label="Открыть Excel файл...", accelerator="Ctrl+O", command=self.btn_open)
+        parse_menu.add_command(label="Открыть JSON файл...", accelerator="Ctrl+P", command=self.btn_open_decocde)
         self.parent.bind("<Control-o>", lambda _: self.btn_open())  # Горячие клавиши
-        parse_menu.add_separator()
-
-        parse_menu.add_command(label="Начать поиск объявлений")
-        parse_menu.add_command(label="Начать поиск объявлений по URL")
-        parse_menu.add_command(label="Начать поиск телефонов")
-        parse_menu.add_command(label="Начать декодирование изображений")
+        self.parent.bind("<Control-p>", lambda _: self.btn_open_decocde())  # Горячие клавиши
         parse_menu.add_separator()
         parse_menu.add_command(label="Выход", command=self.btn_exit)
 
@@ -159,7 +158,7 @@ class AvitoParse(ttk.Frame):
         self.text_url_btn.grid(row=1, column=0, sticky=tk.W, pady=0)
         
         self.generate_url_btn = ttk.Button(common_frame, text="Сгенерировать URL", 
-                                          command="#", width=22)
+                                          command=self.generate_url, width=22)
         self.generate_url_btn.grid(row=1, column=1, padx=5, pady=0, sticky=tk.W)
         
         row += 1
@@ -179,7 +178,7 @@ class AvitoParse(ttk.Frame):
         ttk.Button(button_frame, text="Остановить парсинг", 
                   command=self.stop_parsing, width=20).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Очистить лог", 
-                  command='#', width=20).pack(side=tk.LEFT, padx=5)
+                  command=self.clear_log, width=20).pack(side=tk.LEFT, padx=5)
         
         row += 1
         
@@ -226,6 +225,52 @@ class AvitoParse(ttk.Frame):
         
         # Восстанавливаем размеры окна
         self.parent.geometry(current_geometry)
+    
+    async def translate_text(self, city):
+        """Переводим город на английский для удобства"""
+        self.translator = Translator()
+        a = await self.translator.translate(city, src="ru", dest="en")
+        a = '-'.join(a.text.split())
+        return a.lower()
+           
+    def generate_url(self):
+        """Генерация URL на основе ключевого слова и города"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        keyword = self.keyword_var_keyword.get().strip()
+        city = loop.run_until_complete(self.translate_text(self.city_var_keyword.get().strip()))
+        
+        if not keyword or not city:
+            messagebox.showwarning("Предупреждение", "Введите ключевое слово и город!")
+            return
+
+        """try:
+            city_code = heavy_dicts.city_mapping[self.city_var.get().strip()]
+        except:
+            city_code = city"""
+            
+        generated_url = f"https://www.avito.ru/{city}?q={keyword}" # При try except выше city это city_code
+        
+        self.url_var.set(generated_url)
+        
+        # Предлагаем переключиться на режим по URL
+        if messagebox.askyesno("URL сгенерирован", 
+                              f"URL успешно сгенерирован:\n{generated_url}\n\n"
+                              f"Хотите переключиться на парсер по URL?"):
+            self.parser_mode_key.set("url")
+            self.toggle_parser_mode()
+        self.status_var.set("URL сгенерирован")
+            
+    def run_parsing(self):
+        """Запуск парсинга в зависимости от выбранного режима"""
+        if self.is_parsing:
+            messagebox.showwarning("Предупреждение", "Парсинг уже выполняется!")
+            return
+        self.is_parsing = True
+        if self.parser_mode_key.get() == "keyword":
+            self.run_keyword_parsing()
+        else:
+            self.run_url_parsing() 
             
     def create_keyword_params(self):
         """Создание элементов для парсера по ключу"""
@@ -279,7 +324,7 @@ class AvitoParse(ttk.Frame):
         # Checkbutton для включения фильтра по ключевому слову
         self.enable_keyword_var = tk.BooleanVar(value=True)
         self.enabled_checkbutton = ttk.Checkbutton(self.phone_frame, text="Включить декодирование изображений",
-                                                variable=self.enable_keyword_var, command="self.toggle_keyword_filter")
+                                                variable=self.enable_keyword_var, command="#")
         self.enabled_checkbutton.grid(row=1, column=1, padx=5, pady=0, sticky=tk.W)
         
         
@@ -350,7 +395,7 @@ class AvitoParse(ttk.Frame):
             runner = AsyncParserRunner(
                 parser_instance, 
                 update_callback=self.update_gui_from_thread,
-                # completion_callback=self.on_parsing_complete
+                completion_callback=self.on_parsing_complete
             )
             self.parser_thread = runner.start()
             
@@ -360,9 +405,9 @@ class AvitoParse(ttk.Frame):
     
     def run_parsing(self):
         """Запуск парсинга в зависимости от выбранного режима"""
-        """if self.is_parsing:
+        if self.is_parsing:
             messagebox.showwarning("Предупреждение", "Парсинг уже выполняется!")
-            return"""
+            return
         self.is_parsing = True
         if self.parser_mode_key.get() == "keyword":
             self.run_keyword_parsing()
@@ -379,16 +424,18 @@ class AvitoParse(ttk.Frame):
             messagebox.showwarning("Предупреждение", "Заполните все поля!")
             return
         
-        # ПРАВИЛЬНЫЙ ПОРЯДОК: город, ключевое слово, количество
+        right_city = re.sub(r'[^а-яА-Яa-zA-Z\s]', '', city).strip()
+        self.log_message(f"Начало парсинга по ключу: '{keyword}' в {right_city}, количество: {firm_count}")
+        self.status_var.set(f"Парсинг по ключу: {keyword} в {city}")
+        
         self.is_parsing = True
         self.parser_instance = SearchAvitoAds(city, keyword, firm_count)
-        
-        runner = AsyncParserRunner(
-            self.parser_instance,
-            update_callback=self.update_gui_from_thread,
-            # completion_callback=self.on_parsing_complete
+        self.parser_thread = threading.Thread(
+            target=self.run_async_parsing,
+            args=(self.parser_instance,),
+            daemon=True
         )
-        runner.start()
+        self.parser_thread.start()
     
     def run_url_parsing(self):
         """Запуск парсинга по URL - извлекаем город и ключ из URL"""
@@ -417,6 +464,9 @@ class AvitoParse(ttk.Frame):
                 from urllib.parse import unquote
                 keyword = unquote(keyword)
                 
+                self.log_message(f"Извлечено из URL: город='{city_code}', ключ='{keyword}'")
+                self.status_var.set(f"Парсинг по URL: {city_code} - {keyword}")
+                
                 # Проверяем, что есть ключевое слово
                 if not keyword:
                     messagebox.showwarning("Ошибка", 
@@ -430,7 +480,7 @@ class AvitoParse(ttk.Frame):
                 runner = AsyncParserRunner(
                     self.parser_instance,
                     update_callback=self.update_gui_from_thread,
-                    # completion_callback=self.on_parsing_complete
+                    completion_callback=self.on_parsing_complete
                 )
                 runner.start()
                 
@@ -441,7 +491,22 @@ class AvitoParse(ttk.Frame):
                     "Или: https://www.avito.ru/moskva?q=Доставка")
                     
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Неверный формат URL: {str(e)}")
+            messagebox.showerror("Ошибка", f"Ошибка парсинга по URL: {str(e)}")
+    
+    def on_parsing_complete(self, flag=True):
+        """Вызывается при завершении парсинга (успешном или с ошибкой)"""
+        def update():
+            self.is_parsing = False
+            if flag:
+                self.status_var.set("Парсинг успешно завершен")
+                self.log_message("Парсинг успешно завершен")
+            else:
+                self.status_var.set("Парсинг остановлен")
+                self.log_message("Парсинг остановлен")
+                
+        
+        # Выполняем в основном потоке GUI
+        self.after(0, update)
     
     def stop_parsing(self):
         """Остановка парсинга"""
@@ -460,7 +525,7 @@ class AvitoParse(ttk.Frame):
         
         self.is_parsing = False
         self.status_var.set("Парсинг остановлен")
-        # self.log_message("Парсинг остановлен пользователем")
+        self.log_message("Парсинг остановлен пользователем")
     
     def create_status_bar(self):
         """Создание строки состояния"""
@@ -555,7 +620,60 @@ class AvitoParse(ttk.Frame):
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось загрузить файл:\n{str(e)}")
                 self.status_var.set("Ошибка загрузки файла")
- 
+
+    def hotkeys_info(self):
+        """Обработчик кнопки 'Горячие клавиши'"""
+        # Создаем собственное окно вместо messagebox
+        top = Toplevel()
+        top.title("Горячие клавиши")
+        
+        # Создаем Frame для размещения текстового виджета и скроллбара
+        frame = tk.Frame(top)
+        frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        
+        # Создаем текстовое поле
+        text_widget = Text(frame, wrap=tk.WORD, width=60, height=12, 
+                        font=("Arial", 10))
+        
+        
+        top.resizable(False, False)
+        
+        # Добавляем остальной текст
+        cities = [
+        "       Горячие клавиши приложения:\n",
+        "   Основные операции:\n",
+        "     • Ctrl + O   - Открыть Excel файл...\n",
+        "     • Ctrl + P   - Открыть JSON файл...\n",
+        "     • Ctrl + R   - Запустить парсинг\n",
+        "     • Ctrl + S   - Остановить парсинг\n",
+        "     • Ctrl + L    - Очистить лог\n",
+        "     • Ctrl + Q   - Выйти из приложения\n",
+        "   Дополнительные:\n",
+        "     • Ctrl + G - Сгенерировать URL (в режиме по ключу)\n",
+        "     • F1         - Руководство пользователя\n",
+        "     • Enter     - Запустить парсинг (когда курсор в поле ввода)\n",
+        "   Сочетания клавиш работают в любом месте приложения.\n",
+        ]
+        
+        for city_text in cities:
+            text_widget.insert(tk.END, city_text)
+        
+        text_widget.configure(state='disabled')  # Только для чтения
+        
+        # Кнопка закрытия
+        button = tk.Button(top, text="Закрыть", command=top.destroy)
+        
+        text_widget.pack()
+        button.pack(pady=10)
+        
+        # Центрируем окно
+        top.update_idletasks()
+        width = top.winfo_width()
+        height = top.winfo_height()
+        x = (top.winfo_screenwidth() // 2) - (width // 2)
+        y = (top.winfo_screenheight() // 2) - (height // 2)
+        top.geometry(f'{width}x{height}+{x}+{y}')
+
     def btn_about(self):
         """Обработчик кнопки 'О программе'"""
         # Создаем собственное окно вместо messagebox
@@ -576,7 +694,7 @@ class AvitoParse(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.0.4\n\n",
+        "    Версия 0.0.5\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",
@@ -609,11 +727,42 @@ class AvitoParse(ttk.Frame):
         y = (top.winfo_screenheight() // 2) - (height // 2)
         top.geometry(f'{width}x{height}+{x}+{y}')
  
+    def log_message(self, message):
+        """Добавление сообщения в лог с цветами"""
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        # Определяем уровень
+        msg_lower = message.lower()
+        error_words = ["ошибка", "error", "closed", "exception", "failed", "прервано"]
+        warning_words = ["предупреждение", "warning", "внимание", "остановлен"]
+        success_words = ["успешно", "success", "завершен", "готово", "успешн"]
+        
+        if any(word in msg_lower for word in error_words):
+            level = "ERROR"
+        elif any(word in msg_lower for word in warning_words):
+            level = "WARNING"
+        elif any(word in msg_lower for word in success_words):
+            level = "SUCCESS"
+        else:
+            level = "INFO"
+        
+        formatted_message = f"[{timestamp}] [{level}] {message}\n"
+        
+        # Вставляем с тегом
+        self.log_text.insert(tk.END, formatted_message, (level,))
+        self.log_text.see(tk.END)
+
+    def clear_log(self):
+        """Очистка лога"""
+        self.log_text.delete(1.0, tk.END)
+        self.log_message("Лог очищен")
+        self.status_var.set("Лог очищен")
+ 
     def update_gui_from_thread(self, message):
         """Обновление GUI из потока"""
-        """def update():
+        def update():
             self.log_message(message)
-            self.status_var.set(message[:50] + "..." if len(message) > 50 else message)"""
+            self.status_var.set(message[:50] + "..." if len(message) > 50 else message)
             
         # self.after(0, update)
  
@@ -625,8 +774,8 @@ class AvitoParse(ttk.Frame):
                 return"""
         
         if messagebox.askyesno("Выход", "Вы уверены, что хотите выйти?"):
-            # if self.is_parsing:
-            #     self.stop_parsing()
+            if self.is_parsing:
+                self.stop_parsing()
             self.parent.quit()
         
 def main():

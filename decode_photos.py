@@ -49,7 +49,7 @@ def decode_img_phones(data: dict) -> list:
         url = to_avito_url(raw_url)
 
         # Пропускаем специальные значения
-        if data_url in ["__SKIP_NO_CALLS__", "__SKIP_UNAVAILABLE__", "__SKIP_ON_REVIEW__"]:
+        if data_url in ["__SKIP_NO_CALLS__", "__SKIP_UNAVAILABLE__", "__SKIP_ON_REVIEW__", "__SKIP_ON_REVIEW__"]:
             print(f"[skip] {url} - специальное значение: {data_url}")
             continue
         

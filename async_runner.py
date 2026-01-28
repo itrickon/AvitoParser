@@ -1,6 +1,7 @@
 import asyncio
 import threading
 
+
 class AsyncParserRunner:
     def __init__(self, parser_instance, update_callback=None, completion_callback=None):
         self.parser_instance = parser_instance
@@ -13,7 +14,7 @@ class AsyncParserRunner:
         """Запуск парсинга в отдельном потоке с корректной обработкой asyncio"""
         thread = threading.Thread(target=self._run_in_thread, daemon=True)
         thread.start()
-        
+
         return thread
 
     def _run_in_thread(self):

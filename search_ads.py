@@ -1,6 +1,7 @@
 import os
 import re
 import asyncio
+from pathlib import Path
 from playwright.async_api import async_playwright
 from openpyxl import Workbook, load_workbook
 from googletrans import Translator
@@ -14,9 +15,6 @@ class SearchAvitoAds:
         self.data_saving = "avito_parse_results/avito_ads.xlsx"
         self.start_row = 2
         
-        # Удаляем старый файл
-        if os.path.exists(self.data_saving):
-            os.remove(self.data_saving)
 
     async def _get_links(self):
         link_selector = '[data-marker="item-title"][href]'
