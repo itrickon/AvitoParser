@@ -635,7 +635,7 @@ class AvitoParse:
         ]
         return random.choice(user_agents)
       
-    async def parse_main(self):  
+    async def parse_main(self, update_callback=None):  
         """Парсинг сайта"""
         
         urls = self.read_urls_from_excel_or_csv(self.INPUT_SHEET, self.URL_COLUMN)
@@ -753,7 +753,7 @@ class AvitoParse:
 
                                         
 async def main():
-    parser = AvitoParse(input_file="Корп питание avito_593927_23.12.2025_16.05.xlsx", max_num_firm=500)
+    parser = AvitoParse(input_file="парсер авто.xlsx", max_num_firm=500)
     await parser.parse_main()
 
 if __name__ == "__main__":

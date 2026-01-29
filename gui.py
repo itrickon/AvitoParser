@@ -8,13 +8,15 @@ import threading
 import datetime
 import pandas as pd
 from tkinter import *
+from urllib.parse import unquote
 from googletrans import Translator
 from tkinter import ttk, messagebox, filedialog
 from search_ads import SearchAvitoAds
+from phone_search import AvitoParse
 from async_runner import AsyncParserRunner
 
     
-class AvitoParse(ttk.Frame):
+class AvitoParser(ttk.Frame):
     def __init__(self, parent, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.parent = parent
@@ -34,6 +36,9 @@ class AvitoParse(ttk.Frame):
         
         self.check_button_enabled = IntVar()
         self.is_parsing = False
+        self.bool_decode_input = True
+        self.phone_excel_path = None  # Путь к Excel файлу для парсера телефонов
+        self.decode_json_path = None  # Путь к JSON файлу для декодирования
  
     def interface_style(self):
         sv_ttk.set_theme("light")
@@ -52,9 +57,9 @@ class AvitoParse(ttk.Frame):
         parse_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Парсинг", menu=parse_menu)
         parse_menu.add_command(label="Открыть Excel файл...", accelerator="Ctrl+O", command=self.btn_open)
-        parse_menu.add_command(label="Открыть JSON файл...", accelerator="Ctrl+P", command=self.btn_open_decocde)
+        parse_menu.add_command(label="Открыть JSON файл...", accelerator="Ctrl+P", command=self.btn_open_decode)
         self.parent.bind("<Control-o>", lambda _: self.btn_open())  # Горячие клавиши
-        self.parent.bind("<Control-p>", lambda _: self.btn_open_decocde())  # Горячие клавиши
+        self.parent.bind("<Control-p>", lambda _: self.btn_open_decode())  # Горячие клавиши
         parse_menu.add_separator()
         parse_menu.add_command(label="Выход", command=self.btn_exit)
 
@@ -168,7 +173,7 @@ class AvitoParse(ttk.Frame):
         button_frame.grid(row=row, column=0, sticky=tk.W, padx=20, pady=4)
         button_frame.config(height=40)
         
-        ttk.Button(button_frame, text="Начать парсиг", 
+        ttk.Button(button_frame, text="Начать парсинг", 
                   command=self.run_parsing, width=20).pack(side=tk.LEFT, padx=5)
         
         self.btn_continue_parse = ttk.Button(button_frame, text="Продолжить парсинг", 
@@ -261,17 +266,6 @@ class AvitoParse(ttk.Frame):
             self.toggle_parser_mode()
         self.status_var.set("URL сгенерирован")
             
-    def run_parsing(self):
-        """Запуск парсинга в зависимости от выбранного режима"""
-        if self.is_parsing:
-            messagebox.showwarning("Предупреждение", "Парсинг уже выполняется!")
-            return
-        self.is_parsing = True
-        if self.parser_mode_key.get() == "keyword":
-            self.run_keyword_parsing()
-        else:
-            self.run_url_parsing() 
-            
     def create_keyword_params(self):
         """Создание элементов для парсера по ключу"""
         self.keyword_frame = ttk.Frame(self.params_frame)
@@ -324,9 +318,17 @@ class AvitoParse(ttk.Frame):
         # Checkbutton для включения фильтра по ключевому слову
         self.enable_keyword_var = tk.BooleanVar(value=True)
         self.enabled_checkbutton = ttk.Checkbutton(self.phone_frame, text="Включить декодирование изображений",
-                                                variable=self.enable_keyword_var, command="#")
+                                                variable=self.enable_keyword_var, command=self.decode_photo_boolean)
         self.enabled_checkbutton.grid(row=1, column=1, padx=5, pady=0, sticky=tk.W)
         
+    def decode_photo_boolean(self):
+        """Включение/отключение декодирования изображений"""
+        if self.enable_keyword_var.get():
+            self.bool_decode_input = True
+            self.log_message("Декодирование изображений: ВКЛЮЧЕНО")
+        else:
+            self.bool_decode_input = False
+            self.log_message("Декодирование изображений: ВЫКЛЮЧЕНО")
         
     def create_decode_params(self):
         """Создание элементов для парсера телефонов"""
@@ -337,7 +339,7 @@ class AvitoParse(ttk.Frame):
         ttk.Label(self.decode_frame, text="Выбрать файл:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
         
         self.json_file_btn = ttk.Button(self.decode_frame, text="Файл для декодирования фото", 
-                                        command=self.btn_open_decocde, width=28)
+                                        command=self.btn_open_decode, width=28)
         self.json_file_btn.grid(row=0, column=1, padx=5, pady=0, sticky=tk.W)
         
         # Путь к файлу (необязательно, но полезно)
@@ -413,6 +415,8 @@ class AvitoParse(ttk.Frame):
             self.run_keyword_parsing()
         if self.parser_mode_key.get() == "url":
             self.run_url_parsing()
+        if self.parser_mode_key.get() == "phone":
+            self.run_phone_parsing()
     
     def run_keyword_parsing(self):
         """Запуск парсинга по ключу"""
@@ -460,8 +464,6 @@ class AvitoParse(ttk.Frame):
                 city_code = match.group(1)
                 keyword = match.group(2)
                 
-                # Декодируем URL-кодирование если есть
-                from urllib.parse import unquote
                 keyword = unquote(keyword)
                 
                 self.log_message(f"Извлечено из URL: город='{city_code}', ключ='{keyword}'")
@@ -492,6 +494,55 @@ class AvitoParse(ttk.Frame):
                     
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка парсинга по URL: {str(e)}")
+
+    def run_phone_parsing(self):
+        """Запуск парсинга телефонов из Excel файла"""
+        # Проверяем, что файл выбран
+        if not self.phone_excel_path or not os.path.exists(self.phone_excel_path):
+            messagebox.showwarning("Предупреждение", "Сначала выберите Excel файл!")
+            return
+        
+        if not hasattr(self, 'df') or self.df is None:
+            messagebox.showwarning("Предупреждение", "Файл не загружен! Выберите файл еще раз.")
+            return
+        
+        # Проверяем наличие необходимой колонки
+        if 'Ссылка на объявление' not in self.df.columns:
+            messagebox.showerror("Ошибка", 
+                "В файле должна быть колонка 'Ссылка на объявление' с ссылками на объявления!")
+            return
+        
+        firm_count = self.firm_count_var.get()
+        
+        try:
+            # Получаем список URL для парсинга телефонов
+            urls = self.df['Ссылка на объявление'].dropna().tolist()
+            
+            # Получаем только имя файла для парсера
+            file_name = os.path.basename(self.phone_excel_path)
+            self.log_message(f"Начало парсинга телефонов из файла: {file_name}")
+            self.log_message(f"Количество URL для обработки: {len(urls)}")
+            self.status_var.set(f"Парсинг телефонов: {len(urls)} объявлений")
+            
+            self.is_parsing = True
+
+            # Создаем экземпляр парсера телефонов
+            self.parser_instance = AvitoParse(
+                input_file=self.phone_excel_path,  # Передаем полный путь
+                max_num_firm=firm_count      
+            )
+            
+            # Запускаем парсер асинхронно
+            runner = AsyncParserRunner(
+                self.parser_instance,
+                update_callback=self.update_gui_from_thread,
+                completion_callback=self.on_parsing_complete
+            )
+            runner.start()
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка запуска парсера телефонов: {str(e)}")
+            self.is_parsing = False
     
     def on_parsing_complete(self, flag=True):
         """Вызывается при завершении парсинга (успешном или с ошибкой)"""
@@ -540,7 +591,6 @@ class AvitoParse(ttk.Frame):
         try:
             # Определяем расширение файла
             file_ext = os.path.splitext(file_path)[1].lower()
-            
             if file_ext in ['.xlsx', '.xls']:
                 # Загрузка Excel файла
                 df = pd.read_excel(file_path, na_values=["--.--", "nan", "NaN", "", "---"])
@@ -575,9 +625,7 @@ class AvitoParse(ttk.Frame):
                     df = pd.DataFrame(data)
                 else:
                     raise ValueError(f"Неожиданный формат JSON данных")
-                
                 return df
-                
             else:
                 raise ValueError(f"Неподдерживаемый формат файла: {file_ext}")
 
@@ -588,37 +636,67 @@ class AvitoParse(ttk.Frame):
     def btn_open(self):
         """Обработчик кнопки 'Excel файл после поиска обновлений'"""
         file_path = filedialog.askopenfilename(
-            title="Выберите файл телеметрии",
-            filetypes=[("Excel", "*.xlsx"), ("All files", "*.*")],
+            title="Выберите Excel файл с ссылками на объявления",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")],
         )
         if file_path:
-            self.status_var.set(f"Загрузка файла: {file_path}...")
-            self.update_idletasks()  # Обновляю статус-бар
+            # Сохраняем путь для парсера телефонов
+            self.phone_excel_path = file_path
+            
+            # Отображаем имя файла в интерфейсе
+            file_name = os.path.basename(file_path)
+            self.excel_file_path.set(f"Выбран: {file_name}")
+            
+            self.status_var.set(f"Загрузка файла: {file_name}...")
+            self.update_idletasks()
             try:
+                # Загружаем для проверки
                 self.df = self.load_data(file_path)
-                self.status_var.set(f"Успех! Загружено: {len(self.df)} записей")
-                # self.enable_export_menus()
-                # self.create_tabs()
+                
+                # Проверяем наличие необходимой колонки
+                if 'Ссылка на объявление' not in self.df.columns:
+                    messagebox.showwarning("Предупреждение", 
+                        "В файле должна быть колонка 'Ссылка на объявление'!")
+                    self.phone_excel_path = None
+                else:
+                    self.status_var.set(f"Успех! Загружено: {len(self.df)} записей")
+                    messagebox.showinfo("Файл загружен", 
+                        f"Файл успешно загружен!\n\n"
+                        f"Количество объявлений: {len(self.df)}\n"
+                        f"Теперь можете запустить парсинг телефонов.")
+                    
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось загрузить файл:\n{str(e)}")
                 self.status_var.set("Ошибка загрузки файла")
-                
-    def btn_open_decocde(self):
-        """Обработчик кнопки 'Открыть'"""
+                self.phone_excel_path = None
+
+    def btn_open_decode(self):
+        """Обработчик кнопки 'Открыть JSON файл' для декодирования"""
         file_path = filedialog.askopenfilename(
-            title="Выберите файл телеметрии",
-            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+            title="Выберите JSON файл для декодирования",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
         )
         if file_path:
-            self.status_var.set(f"Загрузка файла: {file_path}...")
-            self.update_idletasks()  # Обновляю статус-бар
+            # Сохраняем путь для декодирования
+            self.decode_json_path = file_path
+            
+            self.status_var.set(f"Загрузка JSON файла...")
+            self.update_idletasks()
             try:
                 self.df = self.load_data(file_path)
-                self.status_var.set(f"Успех! Загружено: {len(self.df)} записей")
-                # self.enable_export_menus()
-                # self.create_tabs()
+                self.status_var.set(f"Успех! Загружено: {len(self.df)} изображений")
+                
+                # Автоматически переключаем на режим декодирования
+                self.parser_mode_key.set("decode")
+                self.toggle_parser_mode()
+                
+                messagebox.showinfo("Файл загружен", 
+                    f"JSON файл успешно загружен!\n\n"
+                    f"Количество изображений: {len(self.df)}\n"
+                    f"Режим переключен на декодирование изображений.")
+                    
             except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось загрузить файл:\n{str(e)}")
+                messagebox.showerror("Ошибка", f"Не удалось загрузить JSON файл:\n{str(e)}")
                 self.status_var.set("Ошибка загрузки файла")
 
     def hotkeys_info(self):
@@ -694,7 +772,7 @@ class AvitoParse(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.0.5\n\n",
+        "    Версия 0.0.6\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",
@@ -764,14 +842,14 @@ class AvitoParse(ttk.Frame):
             self.log_message(message)
             self.status_var.set(message[:50] + "..." if len(message) > 50 else message)
             
-        # self.after(0, update)
+        self.after(0, update)
  
     def btn_exit(self):
         """Выход из приложения"""
-        """if self.is_parsing:
+        if self.is_parsing:
             if not messagebox.askyesno("Предупреждение", 
                                       "Парсинг выполняется. Вы уверены, что хотите выйти?"):
-                return"""
+                return
         
         if messagebox.askyesno("Выход", "Вы уверены, что хотите выйти?"):
             if self.is_parsing:
@@ -781,7 +859,7 @@ class AvitoParse(ttk.Frame):
 def main():
     """Точка входа в приложение"""
     root = tk.Tk()
-    app = AvitoParse(root)
+    app = AvitoParser(root)
     root.mainloop()
 
 
