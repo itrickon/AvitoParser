@@ -682,7 +682,11 @@ class AvitoParse:
                 
                 # Ручной логин на первой ссылке (если есть что открывать)
                 seed_url = self.pending_queue[0] if self.pending_queue else (urls[0] if urls else None)
+                
                 if seed_url:
+                    # Проверяем и исправляем URL на www-версию
+                    seed_url = self.ensure_www_url(seed_url)
+                    
                     page = await context.new_page() # Создание новой страницы
                     
                     await asyncio.sleep(random.uniform(0.4, 0.8))
@@ -750,6 +754,22 @@ class AvitoParse:
             f"\nГотово. В {self.OUT_JSON} сейчас {len(self.phones_map)} записей. "
             f"Отложенных осталось: {len(self.load_pending(self.PENDING_JSON))}"
         )
+
+    def ensure_www_url(self, url: str) -> str:
+        """
+        Преобразует m.avito.ru в www.avito.ru в URL
+        """
+        # Регулярное выражение для поиска m.avito.ru
+        pattern = r'^(https?://)m\.(avito\.ru/.+)$'
+        match = re.match(pattern, url)
+        
+        if match:
+            # Если найдена m.avito.ru, заменяем на www.avito.ru
+            new_url = f"{match.group(1)}www.{match.group(2)}"
+            print(f"Исправлен URL: {url} -> {new_url}")
+            return new_url
+        
+        return url
 
                                         
 async def main():
