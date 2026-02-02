@@ -19,6 +19,7 @@ class AvitoOCRProcessor:
         """
         self.INPUT_JSON = Path(input_json)
         self.OUTPUT_EXCEL = Path(output_excel)
+        self.stop_flag = False  # Флаг для остановки процесса
         
         if tesseract_path:
             pytesseract.pytesseract.tesseract_cmd = tesseract_path
@@ -36,6 +37,10 @@ class AvitoOCRProcessor:
             "__SKIP_ON_REVIEW__"
         }
 
+    def set_stop_flag(self, stop: bool = True):
+        """Устанавливает флаг остановки"""
+        self.stop_flag = stop
+
     def to_avito_url(self, key: str) -> str:
         """
         Преобразует ключи в нормализованный URL Avito.
@@ -51,17 +56,32 @@ class AvitoOCRProcessor:
         
         return base.split("?", 1)[0]
 
-    def decode_img_phones(self, data: dict) -> list:
+    def decode_img_phones(self, data: dict, update_callback=None) -> list:
         """
         Обрабатывает данные и извлекает телефоны из изображений.
         data: Словарь {url: data_uri} из JSON
+        update_callback: Функция для обновления прогресса
         Returns: Список кортежей [(ссылка, телефон), ...]
         """
         results = []
+        total_items = len(data)
+        processed = 0
         
         for raw_url, data_url in data.items():
+            # Проверяем флаг остановки
+            if self.stop_flag:
+                print("Декодирование остановлено пользователем")
+                return results
+            
+            processed += 1
+            
             # Нормализуем ссылку
             url = self.to_avito_url(raw_url)
+
+            # Обновляем прогресс
+            if update_callback:
+                progress_msg = f"Обработка {processed}/{total_items}: {url[:50]}..."
+                update_callback(progress_msg)
 
             # Пропускаем специальные значения
             if data_url in self.skip_values:
@@ -111,7 +131,7 @@ class AvitoOCRProcessor:
         
         return results
 
-    def save_to_excel(self, data: list):
+    def save_to_excel(self, data: list, update_callback=None):
         """
         Сохраняет результаты в Excel файл.
         data: Список кортежей [(ссылка, телефон), ...]
@@ -134,10 +154,15 @@ class AvitoOCRProcessor:
                 column_width = max(df[column].astype(str).map(len).max(), len(column)) + 2
                 col_idx = df.columns.get_loc(column) + 1
                 worksheet.column_dimensions[chr(64 + col_idx)].width = min(column_width, 50)
+        list_cllback = [f"\nФайл сохранён: {self.OUTPUT_EXCEL.resolve()}", 
+                       f"Всего записей с номерами: {df['Телефон'].notna().sum()}"]
         
-        print(f"\nФайл сохранён: {self.OUTPUT_EXCEL.resolve()}")
-        print(f"Всего записей: {len(df)}")
-        print(f"Из них с номерами: {df['Телефон'].notna().sum()}")
+        for i in list_cllback:
+            print(i)
+        if update_callback:
+            for i in list_cllback:
+                list_cllback_mrg = i
+                update_callback(list_cllback_mrg)
 
     def parse_main(self, update_callback=None):
         """
@@ -152,12 +177,18 @@ class AvitoOCRProcessor:
                 raise ValueError("Ожидался JSON-объект {url: data_uri}")
 
         # Получаем данные
-        result = self.decode_img_phones(src)
+        result = self.decode_img_phones(src, update_callback)
+        
+        # Проверяем, была ли остановка
+        if self.stop_flag:
+            print("Декодирование было остановлено")
+            return False
         
         # Сохраняем в Excel
-        self.save_to_excel(result)
+        self.save_to_excel(result, update_callback)
         
         print(f"\nГотово! Файл сохранён как: {self.OUTPUT_EXCEL}")
+        return True
 
 def main():
     """

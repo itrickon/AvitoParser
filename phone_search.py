@@ -649,6 +649,7 @@ class AvitoParse:
         self.pending_queue = self.load_pending(self.PENDING_JSON)
 
         print(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(self.pending_queue)}")
+        update_callback(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(self.pending_queue)}")
         if not urls and not self.pending_queue:
             print(f"Нечего делать. Прогресс в {self.OUT_JSON}: {len(self.phones_map)} записей.")
             return
