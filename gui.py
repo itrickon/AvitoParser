@@ -2,20 +2,19 @@ import os
 import re
 import time
 import sv_ttk
+import shutil
 import asyncio
-import tkinter as tk
-import threading
 import datetime
+import threading
 import pandas as pd
-from tkinter import *
+import tkinter as tk
 from urllib.parse import unquote
 from googletrans import Translator
-from tkinter import ttk, messagebox, filedialog
-from search_ads import SearchAvitoAds
 from phone_search import AvitoParse
+from search_ads import SearchAvitoAds
 from async_runner import AsyncParserRunner
 from decode_photos import AvitoOCRProcessor
-
+from tkinter import ttk, messagebox, filedialog, IntVar, Toplevel, Text
     
 class AvitoParser(ttk.Frame):
     def __init__(self, parent, *args, **kwargs):
@@ -46,6 +45,7 @@ class AvitoParser(ttk.Frame):
         self.output_excel="phones_output.xlsx"
         self.tesseract_path=r"C:\Program Files\Tesseract-OCR\tesseract.exe"
         self.clear_bugs = 'avito_phones_playwright/debug'
+        self.source_file_path = "avito_parse_results/avito_ads.xlsx"
  
     def interface_style(self):
         sv_ttk.set_theme("light")
@@ -72,8 +72,8 @@ class AvitoParser(ttk.Frame):
 
         export_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Экспорт", menu=export_menu)
-        export_menu.add_command(label="Экспорт телефонов...")
-        export_menu.add_command(label="Экспорт изображений...")
+        export_menu.add_command(label="Экспорт объявлений...", command=self.copy_ads_file_to_path)
+        export_menu.add_command(label="Экспорт готового файла...", command=self.copy_ready_file_to_path)
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Справка", menu=help_menu)
@@ -727,6 +727,48 @@ class AvitoParser(ttk.Frame):
             # Прерываем поток
             self.is_decoding = False
     
+    def copy_ads_file_to_path(self):
+        self.file_to_path(self.source_file_path)
+        
+    def copy_ready_file_to_path(self):
+        self.file_to_path(self.output_excel)
+        
+    def file_to_path(self, file_path):
+        """Копирование конкретного файла в выбранную папку"""
+        if not os.path.exists(file_path):
+            self.log_message("Ошибка экспорта объявлений! Исходный файл не найден.")
+            self.status_var.set("Исходный файл не найден.")
+            return
+        
+        target_folder = filedialog.askdirectory(
+            title="Выберите папку для копирования файла"
+        )
+        
+        if not target_folder:
+            return
+        
+        try:
+            filename = os.path.basename(file_path)
+            target_path = os.path.join(target_folder, filename)
+            
+            # Проверка на существование
+            if os.path.exists(target_path):
+                overwrite = messagebox.askyesno(
+                    "Подтверждение",
+                    f"Файл '{filename}' уже существует. Заменить?"
+                )
+                if not overwrite:
+                    return
+            
+            shutil.copy2(file_path, target_path)
+            
+            self.log_message(f"Успех! Файл '{filename}' успешно скопирован в:\n{target_folder}")
+            self.status_var.set(f"Файл '{filename}' успешно скопирован!")
+            
+        except Exception as e:
+            self.log_message(f"Ошибка! Не удалось скопировать файл:\n{str(e)}")
+            self.status_var.set("Не удалось скопировать файл.")
+        
     def create_status_bar(self):
         """Создание строки состояния"""
         self.status_var = tk.StringVar()
@@ -912,7 +954,7 @@ class AvitoParser(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.3.1\n\n",
+        "    Версия 0.3.2\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",
