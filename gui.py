@@ -67,6 +67,9 @@ class AvitoParser(ttk.Frame):
         parse_menu.add_command(label="Открыть JSON файл...", accelerator="Ctrl+P", command=self.btn_open_decode)
         self.parent.bind("<Control-o>", lambda _: self.btn_open())  # Горячие клавиши
         self.parent.bind("<Control-p>", lambda _: self.btn_open_decode())
+        self.parent.bind("<Control-s>", lambda _: self.stop_parsing())
+        self.parent.bind("<Control-l>", lambda _: self.clear_log())
+        self.parent.bind("<Control-q>", lambda _: self.btn_exit())
         parse_menu.add_separator()
         parse_menu.add_command(label="Выход", command=self.btn_exit)
 
@@ -558,9 +561,9 @@ class AvitoParser(ttk.Frame):
             self.runner = AsyncParserRunner(
                 self.parser_instance,
                 update_callback=self.update_gui_from_thread,
-                completion_callback=self.on_parsing_complete
+                completion_callback=self.on_parsing_complete,
             )
-            self.runner.start()
+            self.parser_thread = self.runner.start()
                 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка запуска парсера телефонов: {str(e)}")
@@ -697,39 +700,40 @@ class AvitoParser(ttk.Frame):
         self.after(0, update)
         
     def stop_parsing(self):
-        """Остановка парсинга или декодирования"""
-        # Проверяем, что что-то выполняется
-        if not self.is_parsing and not self.is_decoding:
-            self.log_message(f"Предупреждение! Ничего не выполняется!")
-            self.status_var.set(f"Чтобы остановить парсинг, сначала запустите его!")
+        """Остановка парсинга - просто закрываем Chrome"""
+        if not self.is_parsing:
+            self.log_message("Ничего не выполняется!")
             return
         
-        # Останавливаем парсинг
-        if self.is_parsing:
-            was_parsing = self.is_parsing
-            
-            # Закрытие страницы в отдельном потоке
-            time.sleep(1)
-            if hasattr(self, 'parser_instance'):
-                threading.Thread(
-                    target=lambda: asyncio.run(self.parser_instance.page.close()) 
-                    if hasattr(self.parser_instance, 'page') else None,
-                    daemon=True
-                ).start()
-                
-            self.is_parsing = False
-            if was_parsing and self.is_decoding == False:
-                self.status_var.set("Парсинг остановлен")
-                self.log_message("Парсинг остановлен пользователем")
+        self.is_parsing = False
         
-        # Останавливаем декодирование
-        if self.is_decoding:
-            # Устанавливаем флаг остановки в процессоре
-            if hasattr(self, 'ocr_processor'):
-                self.ocr_processor.set_stop_flag(True)
+        # Просто закрываем Chrome через taskkill
+        import subprocess
+        import os
+        
+        try:
+            if os.name == 'nt':  # Windows
+                # Команда для закрытия Chrome
+                result = subprocess.run(
+                    ['taskkill', '/F', '/IM', 'chrome.exe', '/T'],
+                    capture_output=True,
+                    text=True
+                )
                 
-            # Прерываем поток
-            self.is_decoding = False
+                if result.returncode == 0:
+                    self.log_message("Chrome успешно закрыт")
+                else:
+                    self.log_message(f"Chrome закрыт (код: {result.returncode})")
+                    
+            else:  # Linux/Mac
+                subprocess.run(['pkill', 'chrome'], capture_output=True)
+                self.log_message("Chrome закрыт")
+                
+        except Exception as e:
+            self.log_message(f"При закрытии Chrome: {str(e)}")
+        
+        self.status_var.set("Парсинг остановлен")
+        self.log_message("Парсинг остановлен пользователем")
     
     def copy_ads_file_to_path(self):
         self.file_to_path(self.source_file_path)
@@ -892,7 +896,6 @@ class AvitoParser(ttk.Frame):
                 # Отправляем подтверждение в парсер
                 self.parser_instance.trigger_enter_from_gui()
                 self.log_message("Подтверждение входа отправлено парсеру")
-                self.continue_btn.config(state=tk.DISABLED)
                 self.status_var.set("Парсинг продолжается...")
             else:
                 self.log_message("Ошибка: парсер не инициализирован")
@@ -922,7 +925,6 @@ class AvitoParser(ttk.Frame):
         "   Основные операции:\n",
         "     • Ctrl + O   - Открыть Excel файл...\n",
         "     • Ctrl + P   - Открыть JSON файл...\n",
-        "     • Ctrl + R   - Запустить парсинг\n",
         "     • Ctrl + S   - Остановить парсинг\n",
         "     • Ctrl + L    - Очистить лог\n",
         "     • Ctrl + Q   - Выйти из приложения\n",
@@ -972,7 +974,7 @@ class AvitoParser(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.3.3\n\n",
+        "    Версия 0.3.4\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",

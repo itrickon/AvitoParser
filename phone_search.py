@@ -784,6 +784,7 @@ class AvitoParse:
                     
             finally:
                 await browser.close()
+                self.browser = None
                 
         self.flush_progress()
         print(
