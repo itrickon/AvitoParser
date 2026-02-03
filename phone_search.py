@@ -19,9 +19,13 @@ from PIL import Image
 from pathlib import Path
 
 class AvitoParse:
-    def __init__(self, input_file: str, max_num_firm: int):
+    def __init__(self, input_file: str, max_num_firm: int, gui_works: bool):
         self.input_file = Path(input_file)  # Имя Excel/CSV-файла с ссылками на объявления
         self.max_num_firm = max_num_firm
+        
+        self.gui_works = gui_works
+        self.enter_event = asyncio.Event() if gui_works else None
+        self.use_gui_input = gui_works
         
         self.phones_map = {}  # Инициализация словаря для результатов
         self.pending_queue = []  # Инициализация списка для отложенных
@@ -71,6 +75,28 @@ class AvitoParse:
             ),  # Случайная задержка после клика по телефону (min и max)
         }   
         
+    async def press_and_rel(self):
+        """Ожидает нажатия Enter из GUI или консоли"""
+        if self.gui_works:
+            # Ждем, пока GUI пошлет событие
+            print("Ожидаю нажатия Enter из GUI...")
+            await self.wait_for_gui_enter()
+        else:
+            # Старый способ - ждем из консоли
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, input, "Готов? Нажми Enter в консоли: ")
+    
+    async def wait_for_gui_enter(self):
+        """Асинхронно ждет события от GUI"""
+        while not self.enter_event.is_set():
+            await asyncio.sleep(0.1)
+        self.enter_event.clear()  # Сбрасываем для следующего использования
+    
+    def trigger_enter_from_gui(self):
+        """Вызывается из GUI для имитации нажатия Enter"""
+        if self.gui_works and hasattr(self, 'enter_event'):
+            self.enter_event.set()
+    
             
     async def human_sleep(self, a: float, b: float):
         '''
@@ -631,7 +657,6 @@ class AvitoParse:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 11_7_10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Linux; Android 10; SM-A505FN) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.178 Mobile Safari/537.36",
         ]
         return random.choice(user_agents)
       
@@ -649,7 +674,8 @@ class AvitoParse:
         self.pending_queue = self.load_pending(self.PENDING_JSON)
 
         print(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(self.pending_queue)}")
-        update_callback(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(self.pending_queue)}")
+        if update_callback:
+            update_callback(f"Новых ссылок к обработке: {len(urls)}; отложенных: {len(self.pending_queue)}")
         if not urls and not self.pending_queue:
             print(f"Нечего делать. Прогресс в {self.OUT_JSON}: {len(self.phones_map)} записей.")
             return
@@ -716,9 +742,18 @@ class AvitoParse:
                     print(" • если есть капча — реши;")
                     print(" • залогинься в Авито;")
                     print(" • оставь открытую страницу объявления.")
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, input, "Готов? Нажми Enter в консоли: ")
                     
+                    # Здесь ждем подтверждения входа
+                    if self.gui_works:
+                        if update_callback:
+                            update_callback("Ожидание подтверждения входа... Нажмите 'Вход выполнен'")
+                        await self.press_and_rel()  # Ждем нажатия кнопки в GUI
+                    else:
+                        # Старый способ для консоли
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(None, input, "Готов? Нажми Enter в консоли: ")
+                    
+                    # Проверяем после подтверждения
                     if await self.is_captcha_or_block(page):
                         print("Всё ещё капча/блок — выходим.")
                         await browser.close()
@@ -774,7 +809,7 @@ class AvitoParse:
 
                                         
 async def main():
-    parser = AvitoParse(input_file="парсер авто.xlsx", max_num_firm=500)
+    parser = AvitoParse(input_file="парсер авто.xlsx", max_num_firm=500, gui_works = False)
     await parser.parse_main()
 
 if __name__ == "__main__":

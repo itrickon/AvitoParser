@@ -78,7 +78,7 @@ class AvitoParser(ttk.Frame):
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Справка", menu=help_menu)
         help_menu.add_command(label="Руководство пользователя")
-        help_menu.add_command(label="Горячие клавиши")
+        help_menu.add_command(label="Горячие клавиши", command=self.hotkeys_info)
         help_menu.add_command(label="Очистить папку 'debug'", command=self.clean_directory_except_py)
         help_menu.add_separator()
         help_menu.add_command(label="О программе", command=self.btn_about)
@@ -328,7 +328,10 @@ class AvitoParser(ttk.Frame):
         self.enabled_checkbutton = ttk.Checkbutton(self.phone_frame, text="Включить декодирование изображений",
                                                 variable=self.enable_keyword_var, command=self.decode_photo_boolean)
         self.enabled_checkbutton.grid(row=1, column=1, padx=5, pady=0, sticky=tk.W)
-     
+        
+        self.continue_btn = ttk.Button(self.phone_frame, text="Вход выполнен", 
+                                        command=self.on_continue_clicked, width=22)
+        self.continue_btn.grid(row=1, column=2, padx=(60, 0), pady=0, sticky=tk.W)
         
     def create_decode_params(self):
         """Создание элементов для парсера телефонов"""
@@ -546,8 +549,9 @@ class AvitoParser(ttk.Frame):
 
             # Создаем экземпляр парсера телефонов
             self.parser_instance = AvitoParse(
-                input_file=self.phone_excel_path,  # Передаем полный путь
-                max_num_firm=firm_count      
+                input_file=self.phone_excel_path,
+                max_num_firm=firm_count,
+                gui_works=True  # Указываем, что работает с GUI
             )
             
             # Запускаем парсер асинхронно
@@ -880,7 +884,21 @@ class AvitoParser(ttk.Frame):
                 print(f"Удален файл: {filename}")
         self.log_message(f"Список багов в количестве {len_file_bugs} штук успешно удален")
         self.status_var.set(f"Список багов удален!")
-
+      
+    def on_continue_clicked(self):
+        """Обработчик нажатия кнопки 'Вход выполнен'"""
+        try:
+            if hasattr(self, 'parser_instance') and self.parser_instance:
+                # Отправляем подтверждение в парсер
+                self.parser_instance.trigger_enter_from_gui()
+                self.log_message("Подтверждение входа отправлено парсеру")
+                self.continue_btn.config(state=tk.DISABLED)
+                self.status_var.set("Парсинг продолжается...")
+            else:
+                self.log_message("Ошибка: парсер не инициализирован")
+        except Exception as e:
+            self.log_message(f"Ошибка отправки подтверждения: {str(e)}")
+        
     def hotkeys_info(self):
         """Обработчик кнопки 'Горячие клавиши'"""
         # Создаем собственное окно вместо messagebox
@@ -954,7 +972,7 @@ class AvitoParser(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.3.2\n\n",
+        "    Версия 0.3.3\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",
