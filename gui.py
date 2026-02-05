@@ -24,7 +24,7 @@ class AvitoParser(ttk.Frame):
         self.parent.geometry("950x700")
         
         try:
-            self.parent.iconbitmap("static/Avito_logo.ico")
+            self.parent.iconbitmap("static/AvitoParse_logo.ico")
         except Exception as e:
             print(f"Cannot load icon: {e}")
         
@@ -976,7 +976,7 @@ class AvitoParser(ttk.Frame):
         
         # Добавляем остальной текст
         about_text = [
-        "       Avito Parser\n\n",
+        "       AvitoParser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
         "    Версия 0.3.5\n\n",
         "  Режимы работы:\n",

@@ -826,7 +826,7 @@ class AvitoParse:
 
                                         
 async def main():
-    parser = AvitoParse(input_file="парсер авто.xlsx", max_num_firm=500, gui_works = False)
+    parser = AvitoParse(input_file="avito_parse_results/avito_ads.xlsx", max_num_firm=500, gui_works = False)
     await parser.parse_main()
 
 if __name__ == "__main__":

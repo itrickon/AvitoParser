@@ -32,7 +32,7 @@ pyinstaller --clean --noconfirm ^
 --name="AvitoParser" ^
 --onedir ^
 --windowed ^
---icon="static/Avito_logo.ico" ^
+--icon="static/AvitoParse_logo.ico" ^
 --add-data="static;static" ^
 --add-data="%LOCALAPPDATA%\ms-playwright\chromium-*;ms-playwright" ^
 --runtime-hook=playwright_runtime_hook.py ^
@@ -78,17 +78,17 @@ if not exist "static" mkdir "static"
 
 echo.
 echo Checking for Avito logo...
-if not exist "static\Avito_logo.ico" (
+if not exist "static\AvitoParse_logo.ico" (
     echo WARNING: Avito logo not found in static folder!
-    echo Please place Avito_logo.ico in the static folder.
+    echo Please place AvitoParse_logo.ico in the static folder.
 )
 
 echo.
 echo Creating desktop shortcut...
 set "EXE_PATH=%CD%\AvitoParser.exe"
 set "DESKTOP_PATH=%USERPROFILE%\Desktop"
-set "SHORTCUT_NAME=Avito Parser.lnk"
-set "ICON_PATH=%CD%\static\Avito_logo.ico"
+set "SHORTCUT_NAME=AvitoParser.lnk"
+set "ICON_PATH=%CD%\static\AvitoParse_logo.ico"
 
 :: Проверяем, существует ли EXE
 if not exist "%EXE_PATH%" (
@@ -120,7 +120,7 @@ $Shortcut.WorkingDirectory = '%CD%'; ^
 if (Test-Path '%ICON_PATH%') { ^
     $Shortcut.IconLocation = '%ICON_PATH%'; ^
 } ^
-$Shortcut.Description = 'Avito Parser - Educational Tool'; ^
+$Shortcut.Description = 'AvitoParser - Educational Tool'; ^
 $Shortcut.Save(); ^
 Write-Host 'Shortcut created!'"
 
