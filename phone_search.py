@@ -74,6 +74,7 @@ class AvitoParse:
                 self.CLICK_DELAY * 1.25
             ),  # Случайная задержка после клика по телефону (min и max)
         }   
+    
         
     async def press_and_rel(self):
         """Ожидает нажатия Enter из GUI или консоли"""
@@ -405,12 +406,19 @@ class AvitoParse:
             except Exception:
                 return False
     
-    async def click_show_phone_on_ad(self, page: AsyncPage) -> bool:
+    async def click_show_phone_on_ad(self, page: AsyncPage, update_callback=None) -> bool:
         '''
         Пытается найти и кликнуть на кнопку "Показать телефон" в объявлении.
         Return: True если кнопка найдена и клик выполнен
         '''
         await self.human_scroll_jitter(page)
+
+        # Дополнительная проверка после скролла
+        if await self.is_captcha_or_block(page):
+            print("Обнаружена капча или блокировка после скролла")
+            if update_callback:
+                update_callback("Обнаружена капча или блокировка")
+            return False
 
         for anchor in [
             "[data-marker='seller-info']",
@@ -441,11 +449,14 @@ class AvitoParse:
                 if el and await el.is_visible() and await el.is_enabled():
                     if await self.try_click(page, el):
                         print("Нажали 'Показать телефон'")
+                        if update_callback:
+                            update_callback("Нажали 'Показать телефон'")
                         # Ждем номер телефона
                         try:
                             await page.wait_for_selector("img[data-marker='phone-popup/phone-image']", timeout=3000)
                         except Exception:
                             pass
+                        
                         # Проверяем, появилась ли модалка авторизации
                         if await page.query_selector("[data-marker='login-form']"):
                             print("Обнаружена модалка авторизации после клика")
@@ -502,7 +513,7 @@ class AvitoParse:
             print(f"Ошибка при сохранении PNG: {e}")
             return None
     
-    async def process_urls_with_pool(self, context, urls: list[str], pending_queue: list[str]):
+    async def process_urls_with_pool(self, context, urls: list[str], pending_queue: list[str], update_callback=None):
         '''
         Обрабатывает список URL с использованием пула страниц.
         Args:
@@ -576,8 +587,10 @@ class AvitoParse:
                         continue
                                 
                     # Пытаемся кликнуть на кнопку телефона
-                    if not await self.click_show_phone_on_ad(p):
+                    if not await self.click_show_phone_on_ad(p, update_callback):
                         print(f"Не удалось кликнуть на {url}")
+                        if update_callback:
+                            update_callback(f"Не удалось кликнуть на {url}")
                         await self.dump_debug(p, url)
                         continue  # Переходим к следующему URL 
                     
@@ -600,6 +613,8 @@ class AvitoParse:
                         value = out_path   # Использование пути к файлу
                     await self.on_result(url, value)  # Сохранение результата
                     print(f"{url} -> {'[data:image...]' if self.SAVE_DATA_URL else value}")
+                    if update_callback:
+                        update_callback(f"{url} -> {'[data:image...]' if self.SAVE_DATA_URL else value}")
 
                 await self.human_sleep(*self.PAGE_DELAY_BETWEEN_BATCHES)  # Пауза между партиями
         finally:
@@ -705,6 +720,7 @@ class AvitoParse:
                     user_agent=self.get_random_user_agent(),
                     locale="ru-RU",
                     timezone_id="Europe/Moscow",
+                    extra_http_headers={'Cache-Control': 'no-cache'},
                 )
                 
                 # Ручной логин на первой ссылке (если есть что открывать)
@@ -769,7 +785,7 @@ class AvitoParse:
                 self.pending_queue = [u for u in self.pending_queue if u not in already_done]
                 try:
                     await self.process_urls_with_pool(
-                        context, self.pending_queue, self.pending_queue
+                        context, self.pending_queue, self.pending_queue, update_callback
                     )  # Обработка с добавлением новых отложенных в конец
                 except KeyboardInterrupt:
                     print("Остановлено пользователем (на pending).")
@@ -777,7 +793,7 @@ class AvitoParse:
 
                 # Основной список из Excel
                 try:
-                    await self.process_urls_with_pool(context, urls, self.pending_queue)
+                    await self.process_urls_with_pool(context, urls, self.pending_queue, update_callback)
                 except KeyboardInterrupt:
                     print("Остановлено пользователем (на основных ссылках).")
                     self.flush_progress()

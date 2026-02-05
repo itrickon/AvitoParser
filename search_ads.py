@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from playwright.async_api import async_playwright
 from openpyxl import Workbook, load_workbook
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
 class SearchAvitoAds:
     def __init__(self, sity, keyword, max_num_ads=10):
@@ -93,10 +93,10 @@ class SearchAvitoAds:
             return sity_clean.lower()
         else:
             # Если русское слово - переводим
-            translator = Translator()
+            self.translator = GoogleTranslator(source='ru', target='en')
             try:
-                a = await translator.translate(sity, src="ru", dest="en")
-                a = '-'.join(a.text.split())
+                a = await asyncio.to_thread(self.translator.translate, sity)
+                a = '-'.join(a.split())
                 return a.lower()
             except Exception as e:
                 print(f"Ошибка перевода: {e}")
@@ -113,6 +113,10 @@ class SearchAvitoAds:
             trans_text = await self.translate_text(self.sity)
             # Формируем URL с городом
             await self.page.goto(f"https://www.avito.ru/{trans_text}?cd=1&q={self.keyword}", wait_until="domcontentloaded")
+            
+            # Ждем появление слова "Найти" на странице
+            await self.page.wait_for_selector('text="Найти"', timeout=60000)
+            
             # Собираем ссылки с нескольких страниц
             while len(self.ads) < self.max_num_ads:
                 # Получаем ссылки с текущей страницы

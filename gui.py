@@ -1,19 +1,19 @@
 import os
 import re
-import time
 import sv_ttk
 import shutil
 import asyncio
 import datetime
 import threading
+import webbrowser
 import pandas as pd
 import tkinter as tk
 from urllib.parse import unquote
-from googletrans import Translator
 from phone_search import AvitoParse
 from search_ads import SearchAvitoAds
 from async_runner import AsyncParserRunner
 from decode_photos import AvitoOCRProcessor
+from deep_translator import GoogleTranslator
 from tkinter import ttk, messagebox, filedialog, IntVar, Toplevel, Text
     
 class AvitoParser(ttk.Frame):
@@ -70,6 +70,8 @@ class AvitoParser(ttk.Frame):
         self.parent.bind("<Control-s>", lambda _: self.stop_parsing())
         self.parent.bind("<Control-l>", lambda _: self.clear_log())
         self.parent.bind("<Control-q>", lambda _: self.btn_exit())
+        self.parent.bind("<Control-g>", lambda _: self.generate_url())
+        self.parent.bind("<F1>", lambda _: self.open_link())
         parse_menu.add_separator()
         parse_menu.add_command(label="Выход", command=self.btn_exit)
 
@@ -80,7 +82,7 @@ class AvitoParser(ttk.Frame):
         
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Справка", menu=help_menu)
-        help_menu.add_command(label="Руководство пользователя")
+        help_menu.add_command(label="Руководство пользователя", command=self.open_link)
         help_menu.add_command(label="Горячие клавиши", command=self.hotkeys_info)
         help_menu.add_command(label="Очистить папку 'debug'", command=self.clean_directory_except_py)
         help_menu.add_separator()
@@ -244,9 +246,9 @@ class AvitoParser(ttk.Frame):
     
     async def translate_text(self, city):
         """Переводим город на английский для удобства"""
-        self.translator = Translator()
-        a = await self.translator.translate(city, src="ru", dest="en")
-        a = '-'.join(a.text.split())
+        self.translator = GoogleTranslator(source='ru', target='en')
+        a = await asyncio.to_thread(self.translator.translate, city)
+        a = '-'.join(a.split())
         return a.lower()
            
     def generate_url(self):
@@ -902,6 +904,9 @@ class AvitoParser(ttk.Frame):
         except Exception as e:
             self.log_message(f"Ошибка отправки подтверждения: {str(e)}")
         
+    def open_link(self):
+        webbrowser.open("https://github.com/itrickon/AvitoParser") 
+        
     def hotkeys_info(self):
         """Обработчик кнопки 'Горячие клавиши'"""
         # Создаем собственное окно вместо messagebox
@@ -931,7 +936,6 @@ class AvitoParser(ttk.Frame):
         "   Дополнительные:\n",
         "     • Ctrl + G - Сгенерировать URL (в режиме по ключу)\n",
         "     • F1         - Руководство пользователя\n",
-        "     • Enter     - Запустить парсинг (когда курсор в поле ввода)\n",
         "   Сочетания клавиш работают в любом месте приложения.\n",
         ]
         
@@ -958,14 +962,14 @@ class AvitoParser(ttk.Frame):
         """Обработчик кнопки 'О программе'"""
         # Создаем собственное окно вместо messagebox
         top = Toplevel()
-        top.title("Одноименные города")
+        top.title("О программе")
         
         # Создаем Frame для размещения текстового виджета и скроллбара
         frame = tk.Frame(top)
         frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
         
         # Создаем текстовое поле
-        text_widget = Text(frame, wrap=tk.WORD, width=67, height=25, 
+        text_widget = Text(frame, wrap=tk.WORD, width=67, height=20, 
                         font=("Arial", 10))
         
         top.resizable(False, False)
@@ -974,7 +978,7 @@ class AvitoParser(ttk.Frame):
         about_text = [
         "       Avito Parser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.3.4\n\n",
+        "    Версия 0.3.5\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",

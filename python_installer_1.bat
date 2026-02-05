@@ -8,7 +8,7 @@ echo.
 
 echo.
 echo Installing python...
-powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.14.2/python-3.14.2-amd64.exe' -OutFile 'python_setup.exe'"
+powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.13.11/python-3.13.11-amd64.exe' -OutFile 'python_setup.exe'"
 python_setup.exe
 
 echo.
