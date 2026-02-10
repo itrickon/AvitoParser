@@ -9,6 +9,10 @@ __pycache__/
 # C extensions
 *.so
 
+# exe files
+_internal
+AvitoParser.exe
+
 #bugs
 avito_phones_playwright/debug/*.png
 avito_phones_playwright/debug/*.html
