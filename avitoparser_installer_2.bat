@@ -10,6 +10,10 @@ echo Use responsibly and in compliance with applicable laws.
 echo.
 
 echo.
+echo Updating pip...
+python -m pip install --upgrade pip
+
+echo.
 echo Installing dependencies...
 pip install sv-ttk
 pip install pyinstaller
@@ -19,7 +23,6 @@ pip install openpyxl
 pip install pandas
 pip install pillow
 pip install pytesseract
-pip install asyncio
 
 echo.
 echo Installing Playwright browser...
@@ -27,12 +30,13 @@ playwright install chromium
 
 echo.
 echo Compiling EXE...
-pyinstaller --clean --noconfirm ^
+REM Указываем полный путь к pyinstaller
+python -m PyInstaller --clean --noconfirm ^
 --distpath=. ^
 --name="AvitoParser" ^
 --onedir ^
 --windowed ^
---icon="static/AvitoParse_logo.ico" ^
+--icon="static\AvitoParse_logo.ico" ^
 --add-data="static;static" ^
 --add-data="%LOCALAPPDATA%\ms-playwright\chromium-1208;ms-playwright\chromium-1208" ^
 --runtime-hook=playwright_runtime_hook.py ^
@@ -65,7 +69,16 @@ if exist "AvitoParser" (
     
     echo Files moved successfully!
 ) else (
-    echo ERROR: AvitoParser folder was not created!
+    echo Checking for dist folder...
+    if exist "dist\AvitoParser" (
+        echo Moving from dist folder...
+        move "dist\AvitoParser\*" "." >nul 2>nul
+        rmdir /s /q "dist\AvitoParser" 2>nul
+        echo Files moved successfully!
+    ) else (
+        echo ERROR: No output folder was created!
+        echo Check pyinstaller output above for errors.
+    )
 )
 
 echo.
@@ -81,6 +94,9 @@ echo Checking for Avito logo...
 if not exist "static\AvitoParse_logo.ico" (
     echo WARNING: Avito logo not found in static folder!
     echo Please place AvitoParse_logo.ico in the static folder.
+    echo Creating default icon...
+    REM Создаем пустой файл, чтобы скрипт не падал
+    copy nul "static\AvitoParse_logo.ico" >nul 2>nul
 )
 
 echo.
@@ -93,43 +109,49 @@ set "ICON_PATH=%CD%\static\AvitoParse_logo.ico"
 :: Проверяем, существует ли EXE
 if not exist "%EXE_PATH%" (
     echo ERROR: AvitoParser.exe not found!
-    echo Trying alternative location...
-    if exist "dist\AvitoParser.exe" (
-        move "dist\AvitoParser.exe" "." >nul 2>nul
-        if exist "%EXE_PATH%" (
-            echo EXE found and moved!
-        ) else (
-            echo ERROR: Cannot find AvitoParser.exe
-            pause
-            exit /b 1
-        )
-    ) else (
-        echo ERROR: Cannot find AvitoParser.exe anywhere!
-        pause
-        exit /b 1
-    )
+    echo Check if compilation was successful.
+    pause
+    exit /b 1
 )
 
-:: Создаем ярлык через PowerShell
+:: Создаем ярлык через PowerShell (исправленная версия)
 echo Creating shortcut via PowerShell...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"$WshShell = New-Object -ComObject WScript.Shell; ^
-$Shortcut = $WshShell.CreateShortcut('%DESKTOP_PATH%\%SHORTCUT_NAME%'); ^
-$Shortcut.TargetPath = '%EXE_PATH%'; ^
-$Shortcut.WorkingDirectory = '%CD%'; ^
-if (Test-Path '%ICON_PATH%') { ^
-    $Shortcut.IconLocation = '%ICON_PATH%'; ^
-} ^
-$Shortcut.Description = 'AvitoParser - Educational Tool'; ^
-$Shortcut.Save(); ^
-Write-Host 'Shortcut created!'"
+"try { ^
+    $WshShell = New-Object -ComObject WScript.Shell; ^
+    $Shortcut = $WshShell.CreateShortcut('%DESKTOP_PATH%\%SHORTCUT_NAME%'); ^
+    $Shortcut.TargetPath = '%EXE_PATH%'; ^
+    $Shortcut.WorkingDirectory = '%CD%'; ^
+    if (Test-Path '%ICON_PATH%') { ^
+        $IconFile = Get-Item '%ICON_PATH%'; ^
+        if ($IconFile.Length -gt 0) { ^
+            $Shortcut.IconLocation = '%ICON_PATH%'; ^
+        } ^
+    } ^
+    $Shortcut.Description = 'AvitoParser - Educational Tool'; ^
+    $Shortcut.Save(); ^
+    Write-Host 'Shortcut created successfully!' -ForegroundColor Green; ^
+} catch { ^
+    Write-Host 'Error creating shortcut: ' -ForegroundColor Red -NoNewline; ^
+    Write-Host $_.Exception.Message; ^
+    Write-Host 'Creating shortcut without icon...'; ^
+    $WshShell = New-Object -ComObject WScript.Shell; ^
+    $Shortcut = $WshShell.CreateShortcut('%DESKTOP_PATH%\%SHORTCUT_NAME%'); ^
+    $Shortcut.TargetPath = '%EXE_PATH%'; ^
+    $Shortcut.WorkingDirectory = '%CD%'; ^
+    $Shortcut.Description = 'AvitoParser - Educational Tool'; ^
+    $Shortcut.Save(); ^
+}"
 
 :: Проверяем создание
 if exist "%DESKTOP_PATH%\%SHORTCUT_NAME%" (
     echo Desktop shortcut created: %SHORTCUT_NAME%
+    echo Location: %DESKTOP_PATH%
 ) else (
     echo WARNING: Failed to create desktop shortcut
     echo You can create it manually from AvitoParser.exe
+    echo Or create it using this command:
+    echo   copy "%EXE_PATH%" "%DESKTOP_PATH%\AvitoParser.lnk"
 )
 
 echo.
