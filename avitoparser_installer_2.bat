@@ -1,168 +1,44 @@
 @echo off
 chcp 1251 >nul
-echo.
-echo ====================================================
-echo =                   Avito Parser                   =
-echo ====================================================
-echo.
-echo This tool is for educational and research purposes only.
-echo Use responsibly and in compliance with applicable laws.
-echo.
+cd /d "%~dp0"
 
-echo.
-echo Updating pip...
-python -m pip install --upgrade pip
+echo Installing dependencies globally...
+pip install -U sv-ttk pyinstaller deep_translator playwright openpyxl
 
-echo.
-echo Installing dependencies...
-pip install sv-ttk
-pip install pyinstaller
-pip install deep_translator 
-pip install playwright
-pip install openpyxl
-pip install pandas
-pip install pillow
-pip install pytesseract
+echo Installing Chromium (Playwright default path)...
+python -m playwright install chromium --force
 
-echo.
-echo Installing Playwright browser...
-playwright install chromium
+echo Compiling to SINGLE EXE file...
 
-echo.
-echo Compiling EXE...
-REM Указываем полный путь к pyinstaller
-python -m PyInstaller --clean --noconfirm ^
---distpath=. ^
---name="AvitoParser" ^
---onedir ^
---windowed ^
---icon="static\AvitoParse_logo.ico" ^
---add-data="static;static" ^
---add-data="%LOCALAPPDATA%\ms-playwright\chromium-1208;ms-playwright\chromium-1208" ^
---runtime-hook=playwright_runtime_hook.py ^
---exclude-module=unittest ^
---exclude-module=pydoc ^
-gui.py
+pyinstaller --clean --noconfirm --distpath=. --name="Avito_Parser" --onefile --windowed --icon="static/AvitoParse_logo.ico" --add-data="static;static" --hidden-import=tkinter --hidden-import=tkinter.ttk --hidden-import=tkinter.messagebox --hidden-import=tkinter.filedialog --hidden-import=sv_ttk --hidden-import=deep_translator --hidden-import=playwright --hidden-import=openpyxl --exclude-module=unittest --exclude-module=pydoc gui.py
 
-echo.
-echo Moving files from AvitoParser folder to root...
-if exist "AvitoParser" (
-    echo Moving main executable...
-    move "AvitoParser\AvitoParser.exe" "." >nul 2>nul
-    
-    echo Moving _internal folder...
-    if exist "AvitoParser\_internal" (
-        move "AvitoParser\_internal" "." >nul 2>nul
-    )
-    
-    echo Moving other files...
-    for %%F in ("AvitoParser\*.*") do (
-        if not "%%F"=="AvitoParser\_internal" if not "%%F"=="AvitoParser\AvitoParser.exe" (
-            move "%%F" "." >nul 2>nul
-        )
-    )
-    
-    echo Cleaning up temporary folders...
-    rmdir /s /q "AvitoParser" 2>nul
-    rmdir /s /q build 2>nul
-    del *.spec 2>nul
-    
-    echo Files moved successfully!
-) else (
-    echo Checking for dist folder...
-    if exist "dist\AvitoParser" (
-        echo Moving from dist folder...
-        move "dist\AvitoParser\*" "." >nul 2>nul
-        rmdir /s /q "dist\AvitoParser" 2>nul
-        echo Files moved successfully!
-    ) else (
-        echo ERROR: No output folder was created!
-        echo Check pyinstaller output above for errors.
-    )
-)
-
-echo.
-echo Creating necessary directories...
-if not exist "avito_parse_results" mkdir "avito_parse_results"
-if not exist "avito_phones_playwright" mkdir "avito_phones_playwright"
-if not exist "avito_phones_playwright\phones" mkdir "avito_phones_playwright\phones"
-if not exist "avito_phones_playwright\debug" mkdir "avito_phones_playwright\debug"
-if not exist "static" mkdir "static"
-
-echo.
-echo Checking for Avito logo...
-if not exist "static\AvitoParse_logo.ico" (
-    echo WARNING: Avito logo not found in static folder!
-    echo Please place AvitoParse_logo.ico in the static folder.
-    echo Creating default icon...
-    REM Создаем пустой файл, чтобы скрипт не падал
-    copy nul "static\AvitoParse_logo.ico" >nul 2>nul
-)
-
-echo.
-echo Creating desktop shortcut...
-set "EXE_PATH=%CD%\AvitoParser.exe"
-set "DESKTOP_PATH=%USERPROFILE%\Desktop"
-set "SHORTCUT_NAME=AvitoParser.lnk"
-set "ICON_PATH=%CD%\static\AvitoParse_logo.ico"
-
-:: Проверяем, существует ли EXE
-if not exist "%EXE_PATH%" (
-    echo ERROR: AvitoParser.exe not found!
-    echo Check if compilation was successful.
+if not exist "Avito_Parser.exe" (
+    echo ERROR: Build failed!
     pause
     exit /b 1
 )
 
-:: Создаем ярлык через PowerShell (исправленная версия)
-echo Creating shortcut via PowerShell...
+echo Cleaning up...
+if exist "build" rmdir /s /q "build"
+if exist "*.spec" del *.spec
+
+echo Creating desktop shortcut...
+set "EXE_PATH=%CD%\Avito_Parser.exe"
+set "DESKTOP_PATH=%USERPROFILE%\Desktop"
+set "SHORTCUT_NAME=Avito Parser.lnk"
+set "ICON_PATH=%CD%\static\AvitoParse_logo.ico"
+
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"try { ^
-    $WshShell = New-Object -ComObject WScript.Shell; ^
-    $Shortcut = $WshShell.CreateShortcut('%DESKTOP_PATH%\%SHORTCUT_NAME%'); ^
-    $Shortcut.TargetPath = '%EXE_PATH%'; ^
-    $Shortcut.WorkingDirectory = '%CD%'; ^
-    if (Test-Path '%ICON_PATH%') { ^
-        $IconFile = Get-Item '%ICON_PATH%'; ^
-        if ($IconFile.Length -gt 0) { ^
-            $Shortcut.IconLocation = '%ICON_PATH%'; ^
-        } ^
-    } ^
-    $Shortcut.Description = 'AvitoParser - Educational Tool'; ^
-    $Shortcut.Save(); ^
-    Write-Host 'Shortcut created successfully!' -ForegroundColor Green; ^
-} catch { ^
-    Write-Host 'Error creating shortcut: ' -ForegroundColor Red -NoNewline; ^
-    Write-Host $_.Exception.Message; ^
-    Write-Host 'Creating shortcut without icon...'; ^
-    $WshShell = New-Object -ComObject WScript.Shell; ^
-    $Shortcut = $WshShell.CreateShortcut('%DESKTOP_PATH%\%SHORTCUT_NAME%'); ^
-    $Shortcut.TargetPath = '%EXE_PATH%'; ^
-    $Shortcut.WorkingDirectory = '%CD%'; ^
-    $Shortcut.Description = 'AvitoParser - Educational Tool'; ^
-    $Shortcut.Save(); ^
-}"
+"$WshShell = New-Object -ComObject WScript.Shell; ^
+$Shortcut = $WshShell.CreateShortcut('%DESKTOP_PATH%\%SHORTCUT_NAME%'); ^
+$Shortcut.TargetPath = '%EXE_PATH%'; ^
+$Shortcut.WorkingDirectory = '%CD%'; ^
+$Shortcut.IconLocation = '%ICON_PATH%'; ^
+$Shortcut.Save();"
 
-:: Проверяем создание
-if exist "%DESKTOP_PATH%\%SHORTCUT_NAME%" (
-    echo Desktop shortcut created: %SHORTCUT_NAME%
-    echo Location: %DESKTOP_PATH%
-) else (
-    echo WARNING: Failed to create desktop shortcut
-    echo You can create it manually from AvitoParser.exe
-    echo Or create it using this command:
-    echo   copy "%EXE_PATH%" "%DESKTOP_PATH%\AvitoParser.lnk"
-)
-
-echo.
 echo ====================================================
-echo Installation completed!
-echo.
-echo IMPORTANT: You need to install Tesseract OCR separately:
-echo 1. Download from: https://github.com/UB-Mannheim/tesseract/wiki
-echo 2. Install to: C:\Program Files\Tesseract-OCR\
-echo.
-echo Launch AvitoParser from the desktop shortcut or AvitoParser.exe
-echo ====================================================
-echo.
+echo BUILD COMPLETE
+echo Executable: %EXE_PATH%
+echo Playwright browsers location:
+echo %LOCALAPPDATA%\ms-playwright
 pause

@@ -9,8 +9,8 @@ import webbrowser
 import pandas as pd
 import tkinter as tk
 from urllib.parse import unquote
-from phone_search import AvitoParse
-from search_ads import SearchAvitoAds
+from phone_search_avito import AvitoParse
+from search_ads_avito import SearchAvitoAds
 from async_runner import AsyncParserRunner
 from decode_photos import AvitoOCRProcessor
 from deep_translator import GoogleTranslator
@@ -756,7 +756,7 @@ class AvitoParser(ttk.Frame):
         
         if not target_folder:
             return
-        
+
         try:
             filename = os.path.basename(file_path)
             target_path = os.path.join(target_folder, filename)
@@ -978,7 +978,7 @@ class AvitoParser(ttk.Frame):
         about_text = [
         "       AvitoParser\n\n",
         "  Данный инструмент предназначен для сбора открытой информации в образовательных и исследовательских целях.\n\n",
-        "    Версия 0.3.7\n\n",
+        "    Версия 0.4.0\n\n",
         "  Режимы работы:\n",
         "    1. Парсер по ключу - поиск организаций по ключевому слову и городу\n",
         "    2. Парсер по URL - парсинг конкретной страницы поиска Avito\n\n",

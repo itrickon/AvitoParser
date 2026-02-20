@@ -12,6 +12,7 @@ __pycache__/
 # exe files
 _internal
 AvitoParser.exe
+run_parser.bat
 
 #bugs
 avito_phones_playwright/debug/*.png

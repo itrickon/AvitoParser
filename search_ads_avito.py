@@ -1,20 +1,18 @@
 import os
 import re
 import asyncio
-from pathlib import Path
 from playwright.async_api import async_playwright
 from openpyxl import Workbook, load_workbook
 from deep_translator import GoogleTranslator
 
 
 class SearchAvitoAds:
-    def __init__(self, sity, keyword, max_num_ads=10):
-        self.sity = sity
+    def __init__(self, city, keyword, max_num_ads=10):
+        self.city = city
         self.keyword = keyword
         self.max_num_ads = max_num_ads
         self.ads = []
         self.data_saving = "avito_parse_results/avito_ads.xlsx"
-        self.start_row = 2
         self.warning_message()
 
     async def _get_links(self):
@@ -48,17 +46,17 @@ class SearchAvitoAds:
         os.makedirs("avito_parse_results", exist_ok=True)
 
         # Создаем новую рабочую область
-        self.wb = Workbook()
-        self.ws = self.wb.active
-        self.ws.title = "Avito Ads"
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Avito Ads"
 
         # Добавляем заголовки
         headers = ["Ссылка на объявление", "ID"]
         for col, header in enumerate(headers, start=1):
-            self.ws.cell(row=1, column=col, value=header)
+            ws.cell(row=1, column=col, value=header)
 
         # Сохраняем файл
-        self.wb.save(self.data_saving)
+        wb.save(self.data_saving)
         print(f"Создан файл: {self.data_saving}")
 
     def _save_to_xlsx(self):
@@ -83,20 +81,20 @@ class SearchAvitoAds:
         wb.save(self.data_saving)
         print(f"Данные сохранены в файл: {self.data_saving}")
 
-    async def translate_text(self, sity):
+    async def translate_text(self, city):
         """Переводим город на английский"""
         # Проверяем, является ли слово английским (только латинские буквы)
-        is_english = bool(re.match(r"^[a-zA-Z\s\-]+$", sity))
+        is_english = bool(re.match(r"^[a-zA-Z\s\-]+$", city))
 
         if is_english:
             # Если уже английское слово, просто форматируем
-            sity_clean = "-".join(sity.split())
-            return sity_clean.lower()
+            city_clean = "-".join(city.split())
+            return city_clean.lower()
         else:
             # Если русское слово - переводим
-            self.translator = GoogleTranslator(source="ru", target="en")
+            translator = GoogleTranslator(source="ru", target="en")
             try:
-                a = await asyncio.to_thread(self.translator.translate, sity)
+                a = await asyncio.to_thread(translator.translate, city)
                 a = "-".join(a.split())
                 return a.lower()
             except Exception as e:
@@ -118,7 +116,7 @@ class SearchAvitoAds:
             self.context = await browser.new_context()
             self.page = await self.context.new_page()
 
-            trans_text = await self.translate_text(self.sity)
+            trans_text = await self.translate_text(self.city)
             # Формируем URL с городом
             await self.page.goto(
                 f"https://www.avito.ru/{trans_text}?cd=1&q={self.keyword}",
@@ -163,7 +161,7 @@ class SearchAvitoAds:
 
 
 async def main():
-    parser = SearchAvitoAds(sity="Липецк", keyword="Игровая клавиатура", max_num_ads=5)
+    parser = SearchAvitoAds(city="Липецк", keyword="Игровая клавиатура", max_num_ads=5)
     await parser.parse_main()
 
 
